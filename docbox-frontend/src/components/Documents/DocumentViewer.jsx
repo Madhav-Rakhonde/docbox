@@ -329,3 +329,4 @@ const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
     </Dialog>
   );
 };
+export default DocumentViewer;
