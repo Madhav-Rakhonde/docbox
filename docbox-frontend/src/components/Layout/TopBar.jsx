@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AppBar,
@@ -21,11 +21,34 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'react-toastify';
+import api from '../../services/api'; // ✅ ADDED for API calls
 
 const TopBar = ({ onMenuClick, drawerWidth, isMobile }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [anchorEl, setAnchorEl] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0); // ✅ ADDED: Dynamic count
+
+  // ✅ ADDED: Load notification count on mount
+  useEffect(() => {
+    loadNotificationCount();
+    // Refresh count every 30 seconds
+    const interval = setInterval(loadNotificationCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ✅ ADDED: Function to load notification count
+  const loadNotificationCount = async () => {
+    try {
+      const response = await api.get('/notifications/unread/count');
+      if (response.data.success) {
+        setNotificationCount(response.data.data.count || 0);
+      }
+    } catch (error) {
+      console.error('Failed to load notification count:', error);
+      // Silently fail - don't show error to user
+    }
+  };
 
   const handleMenu = (event) => {
     setAnchorEl(event.currentTarget);
@@ -49,6 +72,13 @@ const TopBar = ({ onMenuClick, drawerWidth, isMobile }) => {
       toast.error('Logout failed');
     }
     handleClose();
+  };
+
+  // ✅ ADDED: Handle notification click
+  const handleNotificationClick = () => {
+    navigate('/notifications');
+    // Optionally refresh count after navigation
+    setTimeout(loadNotificationCount, 500);
   };
 
   return (
@@ -97,10 +127,18 @@ const TopBar = ({ onMenuClick, drawerWidth, isMobile }) => {
             </IconButton>
           </Tooltip>
 
-          {/* Notifications */}
+          {/* Notifications - ✅ FIXED: Added onClick handler and dynamic count */}
           <Tooltip title="Notifications">
-            <IconButton color="inherit" size={isMobile ? 'small' : 'medium'}>
-              <Badge badgeContent={3} color="error">
+            <IconButton 
+              color="inherit" 
+              size={isMobile ? 'small' : 'medium'}
+              onClick={handleNotificationClick} // ✅ ADDED: Navigate to notifications
+            >
+              <Badge 
+                badgeContent={notificationCount} // ✅ CHANGED: Dynamic count
+                color="error"
+                max={99} // ✅ ADDED: Show 99+ for large numbers
+              >
                 <Notifications />
               </Badge>
             </IconButton>

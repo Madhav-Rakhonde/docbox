@@ -18,12 +18,11 @@ import { Storage, Description, TrendingUp } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import StorageChart from '../components/Analytics/StorageChart';
 import CategoryChart from '../components/Analytics/CategoryChart';
-import analyticsService from '../services/analyticsService';
+import api from '../services/api';
 
 const Analytics = () => {
   const [loading, setLoading] = useState(true);
-  const [storageData, setStorageData] = useState(null);
-  const [documentStats, setDocumentStats] = useState(null);
+  const [storageStats, setStorageStats] = useState(null);
   const [expiryData, setExpiryData] = useState(null);
 
   useEffect(() => {
@@ -34,43 +33,45 @@ const Analytics = () => {
     try {
       setLoading(true);
       
-      const [storageRes, docStatsRes, expiryRes] = await Promise.all([
-        analyticsService.getStorageInsights().catch(() => null),
-        analyticsService.getDocumentStats().catch(() => null),
-        analyticsService.getExpiryInsights().catch(() => null),
-      ]);
-
-      if (storageRes?.success) {
-        // ✅ FIX: Transform storage data properly
-        const transformedStorage = {
-          ...storageRes.data,
-          storageByCategory: storageRes.data.storageByCategory?.map(item => ({
-            category: item[0] || 'Others',
-            bytes: parseInt(item[1]) || 0
-          })) || []
-        };
-        setStorageData(transformedStorage);
+      // Fetch storage stats from /documents/stats endpoint
+      const statsResponse = await api.get('/documents/stats');
+      
+      if (statsResponse.data?.success) {
+        const data = statsResponse.data.data;
+        console.log('Storage Stats:', data);
+        setStorageStats(data);
       }
 
-      if (docStatsRes?.success) {
-        // ✅ FIX: Transform document stats properly
-        const transformedStats = {
-          ...docStatsRes.data,
-          byFileType: docStatsRes.data.byFileType?.map(item => ({
-            fileType: item[0] || 'Unknown',
-            count: parseInt(item[1]) || 0
-          })) || [],
-          topCategories: docStatsRes.data.topCategories?.map(item => ({
-            category: item[0] || 'Others',
-            count: parseInt(item[1]) || 0
-          })) || []
-        };
-        setDocumentStats(transformedStats);
+      // Fetch expiring documents
+      try {
+        const expiryResponse = await api.get('/documents/expiring?days=30');
+        if (expiryResponse.data?.success) {
+          const expiringDocs = expiryResponse.data.data?.documents || [];
+          
+          const now = new Date();
+          const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+          const thirtyDaysLater = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+          
+          const expired = expiringDocs.filter(doc => new Date(doc.expiryDate) < now).length;
+          const expiring7 = expiringDocs.filter(doc => {
+            const expiryDate = new Date(doc.expiryDate);
+            return expiryDate >= now && expiryDate <= sevenDaysLater;
+          }).length;
+          const expiring30 = expiringDocs.filter(doc => {
+            const expiryDate = new Date(doc.expiryDate);
+            return expiryDate > sevenDaysLater && expiryDate <= thirtyDaysLater;
+          }).length;
+          
+          setExpiryData({
+            expired,
+            expiringIn7Days: expiring7,
+            expiringIn30Days: expiring30
+          });
+        }
+      } catch (err) {
+        console.log('Expiry data not available');
       }
 
-      if (expiryRes?.success) {
-        setExpiryData(expiryRes.data);
-      }
     } catch (error) {
       console.error('Analytics error:', error);
       toast.error('Failed to load analytics');
@@ -84,6 +85,47 @@ const Analytics = () => {
     const mb = bytes / (1024 * 1024);
     if (mb < 1024) return `${mb.toFixed(1)} MB`;
     return `${(mb / 1024).toFixed(2)} GB`;
+  };
+
+  // Transform storage by category data
+  const getStorageByCategory = () => {
+    if (!storageStats?.storageByCategory) return [];
+    
+    return storageStats.storageByCategory.map(item => ({
+      category: item.category || 'Others',
+      bytes: parseInt(item.bytes) || 0
+    }));
+  };
+
+  // Transform documents by category data
+  const getDocumentsByCategory = () => {
+    if (!storageStats?.documentsByCategory) return [];
+    
+    return storageStats.documentsByCategory.map(item => ({
+      category: item.category || 'Others',
+      count: parseInt(item.count) || 0
+    }));
+  };
+
+  // Transform documents by file type data
+  const getDocumentsByFileType = () => {
+    if (!storageStats?.documentsByFileType) return [];
+    
+    return storageStats.documentsByFileType.map(item => ({
+      fileType: item.fileType || 'Unknown',
+      count: parseInt(item.count) || 0
+    }));
+  };
+
+  const getTotalDocuments = () => {
+    if (!storageStats?.documentsByFileType) return 0;
+    return storageStats.documentsByFileType.reduce((sum, item) => sum + (parseInt(item.count) || 0), 0);
+  };
+
+  const getAverageFileSize = () => {
+    const total = getTotalDocuments();
+    if (total === 0 || !storageStats?.totalStorageBytes) return 0;
+    return (storageStats.totalStorageBytes / (1024 * 1024)) / total;
   };
 
   if (loading) {
@@ -116,7 +158,7 @@ const Analytics = () => {
               <Storage sx={{ fontSize: 40, color: 'primary.main' }} />
               <Box>
                 <Typography variant="h5" fontWeight="bold">
-                  {formatBytes(storageData?.totalStorageBytes)}
+                  {formatBytes(storageStats?.totalStorageBytes)}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Total Storage Used
@@ -132,7 +174,7 @@ const Analytics = () => {
               <Description sx={{ fontSize: 40, color: 'secondary.main' }} />
               <Box>
                 <Typography variant="h5" fontWeight="bold">
-                  {documentStats?.byFileType?.reduce((sum, item) => sum + (item.count || 0), 0) || 0}
+                  {getTotalDocuments()}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Total Documents
@@ -148,7 +190,7 @@ const Analytics = () => {
               <TrendingUp sx={{ fontSize: 40, color: 'success.main' }} />
               <Box>
                 <Typography variant="h5" fontWeight="bold">
-                  {documentStats?.averageFileSizeMB?.toFixed(1) || '0'} MB
+                  {getAverageFileSize().toFixed(1)} MB
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Avg File Size
@@ -163,14 +205,14 @@ const Analytics = () => {
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} md={6}>
           <StorageChart
-            data={storageData?.storageByCategory || []}
+            data={getStorageByCategory()}
             loading={loading}
           />
         </Grid>
 
         <Grid item xs={12} md={6}>
           <CategoryChart
-            data={documentStats?.byFileType || []}
+            data={getDocumentsByCategory()}
             loading={loading}
           />
         </Grid>
@@ -184,7 +226,7 @@ const Analytics = () => {
           </Typography>
           <Grid container spacing={3} sx={{ mt: 1 }}>
             <Grid item xs={12} sm={4}>
-              <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'error.lighter', borderRadius: 1 }}>
+              <Box sx={{ textAlign: 'center', p: 2, bgcolor: '#ffebee', borderRadius: 1 }}>
                 <Typography variant="h4" fontWeight="bold" color="error.main">
                   {expiryData.expired || 0}
                 </Typography>
@@ -194,7 +236,7 @@ const Analytics = () => {
               </Box>
             </Grid>
             <Grid item xs={12} sm={4}>
-              <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'warning.lighter', borderRadius: 1 }}>
+              <Box sx={{ textAlign: 'center', p: 2, bgcolor: '#fff3e0', borderRadius: 1 }}>
                 <Typography variant="h4" fontWeight="bold" color="warning.main">
                   {expiryData.expiringIn7Days || 0}
                 </Typography>
@@ -204,7 +246,7 @@ const Analytics = () => {
               </Box>
             </Grid>
             <Grid item xs={12} sm={4}>
-              <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'info.lighter', borderRadius: 1 }}>
+              <Box sx={{ textAlign: 'center', p: 2, bgcolor: '#e3f2fd', borderRadius: 1 }}>
                 <Typography variant="h4" fontWeight="bold" color="info.main">
                   {expiryData.expiringIn30Days || 0}
                 </Typography>
@@ -218,7 +260,7 @@ const Analytics = () => {
       )}
 
       {/* Top Categories */}
-      {documentStats?.topCategories && documentStats.topCategories.length > 0 && (
+      {getDocumentsByCategory().length > 0 && (
         <Paper sx={{ p: 3 }}>
           <Typography variant="h6" gutterBottom fontWeight="600">
             Top Categories
@@ -233,8 +275,8 @@ const Analytics = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {documentStats.topCategories.slice(0, 5).map((cat, index) => {
-                  const total = documentStats.topCategories.reduce((sum, c) => sum + (c.count || 0), 0);
+                {getDocumentsByCategory().slice(0, 5).map((cat, index) => {
+                  const total = getTotalDocuments();
                   const percentage = total > 0 ? ((cat.count / total) * 100).toFixed(1) : 0;
                   return (
                     <TableRow key={index}>

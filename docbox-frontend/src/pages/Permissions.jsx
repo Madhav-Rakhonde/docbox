@@ -40,15 +40,17 @@ import {
   LockOpen,
   Category as CategoryIcon,
   Description,
+  LockReset,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
 const Permissions = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const preSelectedMemberId = searchParams.get('member');
-  
+
   const [tabValue, setTabValue] = useState(0);
   const [documentPermissions, setDocumentPermissions] = useState([]);
   const [categoryPermissions, setCategoryPermissions] = useState([]);
@@ -63,11 +65,10 @@ const Permissions = () => {
     familyMemberId: preSelectedMemberId || '',
     documentId: '',
     categoryId: '',
-    permissionLevel: 'VIEW_ONLY', // ✅ FIXED: Changed from 'VIEW' to 'VIEW_ONLY'
+    permissionLevel: 'VIEW_ONLY',
   });
   const [submitting, setSubmitting] = useState(false);
 
-  // ✅ FIXED: Corrected enum values to match backend
   const permissionLevels = [
     { value: 'VIEW_ONLY', label: 'View Only', description: 'Can only view', icon: <Visibility /> },
     { value: 'VIEW_DOWNLOAD', label: 'View & Download', description: 'Can view and download', icon: <Download /> },
@@ -97,45 +98,81 @@ const Permissions = () => {
     }
   };
 
+  // ✅ FIXED: Use /granted/documents to get permissions granted BY primary account
   const loadDocumentPermissions = async () => {
     try {
-      const response = await api.get('/permissions/my-permissions');
+      const response = await api.get('/permissions/granted/documents');
       if (response.data.success) {
-        const perms = response.data.data;
+        const perms = response.data.data || [];
         setDocumentPermissions(Array.isArray(perms) ? perms : []);
       } else {
-        setDocumentPermissions([]);
+        // Fallback to original endpoint
+        const fallback = await api.get('/permissions/my-permissions');
+        if (fallback.data.success) {
+          const data = fallback.data.data;
+          const perms = data.documentPermissions || data || [];
+          setDocumentPermissions(Array.isArray(perms) ? perms : []);
+        } else {
+          setDocumentPermissions([]);
+        }
       }
     } catch (error) {
-      console.error('Failed to load document permissions:', error);
-      setDocumentPermissions([]);
+      // Fallback to original endpoint if new one doesn't exist yet
+      try {
+        const fallback = await api.get('/permissions/my-permissions');
+        if (fallback.data.success) {
+          const data = fallback.data.data;
+          const perms = data.documentPermissions || data || [];
+          setDocumentPermissions(Array.isArray(perms) ? perms : []);
+        } else {
+          setDocumentPermissions([]);
+        }
+      } catch (e) {
+        console.error('Failed to load document permissions:', e);
+        setDocumentPermissions([]);
+      }
     }
   };
 
+  // ✅ FIXED: Use /granted/categories to get permissions granted BY primary account
   const loadCategoryPermissions = async () => {
     try {
-      const response = await api.get('/permissions/category-permissions');
+      const response = await api.get('/permissions/granted/categories');
       if (response.data.success) {
-        const perms = response.data.data;
+        const perms = response.data.data || [];
         setCategoryPermissions(Array.isArray(perms) ? perms : []);
       } else {
-        setCategoryPermissions([]);
+        // Fallback
+        const fallback = await api.get('/permissions/category-permissions');
+        if (fallback.data.success) {
+          const perms = fallback.data.data || [];
+          setCategoryPermissions(Array.isArray(perms) ? perms : []);
+        } else {
+          setCategoryPermissions([]);
+        }
       }
     } catch (error) {
-      console.error('Failed to load category permissions:', error);
-      setCategoryPermissions([]);
+      // Fallback to original endpoint if new one doesn't exist yet
+      try {
+        const fallback = await api.get('/permissions/category-permissions');
+        if (fallback.data.success) {
+          const perms = fallback.data.data || [];
+          setCategoryPermissions(Array.isArray(perms) ? perms : []);
+        } else {
+          setCategoryPermissions([]);
+        }
+      } catch (e) {
+        console.error('Failed to load category permissions:', e);
+        setCategoryPermissions([]);
+      }
     }
   };
 
   const loadCategories = async () => {
     try {
       const response = await api.get('/categories');
-      if (response.data.success) {
-        const cats = response.data.data;
-        setCategories(Array.isArray(cats) ? cats : []);
-      } else {
-        setCategories([]);
-      }
+      const data = response.data.success ? response.data.data : response.data;
+      setCategories(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load categories:', error);
       setCategories([]);
@@ -147,7 +184,10 @@ const Permissions = () => {
       const response = await api.get('/family-members');
       if (response.data.success) {
         const members = response.data.data;
-        setFamilyMembers(Array.isArray(members) ? members : []);
+        const subAccounts = (Array.isArray(members) ? members : []).filter(
+          (member) => member.isSubAccount || member.accountType === 'sub_account'
+        );
+        setFamilyMembers(subAccounts);
       } else {
         setFamilyMembers([]);
       }
@@ -159,9 +199,10 @@ const Permissions = () => {
 
   const loadDocuments = async () => {
     try {
-      const response = await api.get('/documents');
+      const response = await api.get('/documents?page=0&size=1000');
       if (response.data.success) {
-        const docs = response.data.data;
+        const data = response.data.data;
+        const docs = data.documents || data.content || data || [];
         setDocuments(Array.isArray(docs) ? docs : []);
       } else {
         setDocuments([]);
@@ -177,7 +218,7 @@ const Permissions = () => {
     if (permission) {
       setEditingPermission(permission);
       setFormData({
-        familyMemberId: permission.familyMemberId || '',
+        familyMemberId: permission.familyMemberId || permission.userId || '',
         documentId: permission.documentId || '',
         categoryId: permission.categoryId || '',
         permissionLevel: permission.permissionLevel || permission.defaultPermissionLevel || 'VIEW_ONLY',
@@ -210,12 +251,10 @@ const Permissions = () => {
       toast.error('Please select a family member');
       return;
     }
-
     if (dialogType === 'document' && !formData.documentId) {
       toast.error('Please select a document');
       return;
     }
-
     if (dialogType === 'category' && !formData.categoryId) {
       toast.error('Please select a category');
       return;
@@ -231,7 +270,6 @@ const Permissions = () => {
 
       if (dialogType === 'document') {
         payload.documentId = parseInt(formData.documentId);
-        
         if (editingPermission) {
           await api.put(`/permissions/${editingPermission.id}`, payload);
           toast.success('Permission updated successfully!');
@@ -242,7 +280,6 @@ const Permissions = () => {
         await loadDocumentPermissions();
       } else {
         payload.categoryId = parseInt(formData.categoryId);
-        
         if (editingPermission) {
           await api.put(`/permissions/category/${editingPermission.id}`, payload);
           toast.success('Category permission updated successfully!');
@@ -267,7 +304,6 @@ const Permissions = () => {
     if (!window.confirm('Are you sure you want to revoke this permission?')) {
       return;
     }
-
     try {
       if (type === 'document') {
         await api.delete(`/permissions/${permissionId}`);
@@ -286,16 +322,11 @@ const Permissions = () => {
 
   const getPermissionLevelColor = (level) => {
     switch (level) {
-      case 'VIEW_ONLY':
-        return 'default';
-      case 'VIEW_DOWNLOAD':
-        return 'primary';
-      case 'VIEW_DOWNLOAD_SHARE':
-        return 'secondary';
-      case 'FULL_ACCESS':
-        return 'success';
-      default:
-        return 'default';
+      case 'VIEW_ONLY': return 'default';
+      case 'VIEW_DOWNLOAD': return 'primary';
+      case 'VIEW_DOWNLOAD_SHARE': return 'secondary';
+      case 'FULL_ACCESS': return 'success';
+      default: return 'default';
     }
   };
 
@@ -317,13 +348,23 @@ const Permissions = () => {
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={600}>
-          Permissions Management
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Control who can access your documents and categories
-        </Typography>
+      <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2 }}>
+        <Box>
+          <Typography variant="h4" gutterBottom fontWeight={600}>
+            Permissions Management
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Control who can access your documents and categories
+          </Typography>
+        </Box>
+        <Button
+          variant="outlined"
+          color="warning"
+          startIcon={<LockReset />}
+          onClick={() => navigate('/permissions/revoke')}
+        >
+          Revoke Permissions
+        </Button>
       </Box>
 
       {/* Stats Cards */}
@@ -336,7 +377,7 @@ const Permissions = () => {
                 <Box>
                   <Typography variant="h6">{documentPermissions.length}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Document Permissions
+                    Document Permissions Granted
                   </Typography>
                 </Box>
               </Box>
@@ -351,7 +392,7 @@ const Permissions = () => {
                 <Box>
                   <Typography variant="h6">{categoryPermissions.length}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Category Permissions
+                    Category Permissions Granted
                   </Typography>
                 </Box>
               </Box>
@@ -360,7 +401,12 @@ const Permissions = () => {
         </Grid>
       </Grid>
 
-      {/* Info Alert */}
+      {/* Alerts */}
+      {familyMembers.length === 0 && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          No family members with login access found. Add sub-account family members to grant them permissions.
+        </Alert>
+      )}
       {preSelectedMemberId && (
         <Alert severity="info" sx={{ mb: 3 }}>
           Managing permissions for selected family member (ID: {preSelectedMemberId})
@@ -384,6 +430,7 @@ const Permissions = () => {
               variant="contained"
               startIcon={<Add />}
               onClick={() => handleOpenDialog('document')}
+              disabled={familyMembers.length === 0}
             >
               Grant Permission
             </Button>
@@ -391,13 +438,16 @@ const Permissions = () => {
           {documentPermissions.length === 0 ? (
             <Box sx={{ p: 6, textAlign: 'center' }}>
               <Security sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" gutterBottom>
-                No Document Permissions
-              </Typography>
+              <Typography variant="h6" gutterBottom>No Document Permissions</Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
                 Grant permissions to family members to access specific documents
               </Typography>
-              <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog('document')}>
+              <Button
+                variant="contained"
+                startIcon={<Add />}
+                onClick={() => handleOpenDialog('document')}
+                disabled={familyMembers.length === 0}
+              >
                 Grant First Permission
               </Button>
             </Box>
@@ -415,9 +465,21 @@ const Permissions = () => {
                 </TableHead>
                 <TableBody>
                   {documentPermissions.map((perm) => (
-                    <TableRow key={perm.id}>
-                      <TableCell>{perm.familyMemberName || perm.userName || 'Unknown'}</TableCell>
-                      <TableCell>{perm.documentName || perm.document?.originalFilename || 'Unknown'}</TableCell>
+                    <TableRow key={perm.id} hover>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={500}>
+                          {perm.userFullName || perm.userEmail || 'Unknown'}
+                        </Typography>
+                        {perm.userEmail && perm.userFullName && (
+                          <Typography variant="caption" color="text.secondary">{perm.userEmail}</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{perm.documentName || 'Unknown'}</Typography>
+                        {perm.categoryName && (
+                          <Typography variant="caption" color="text.secondary">{perm.categoryName}</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Chip
                           label={getPermissionLevelLabel(perm.permissionLevel)}
@@ -426,23 +488,15 @@ const Permissions = () => {
                         />
                       </TableCell>
                       <TableCell>
-                        {perm.grantedAt || perm.createdAt
-                          ? new Date(perm.grantedAt || perm.createdAt).toLocaleDateString('en-IN')
+                        {perm.grantedAt
+                          ? new Date(perm.grantedAt).toLocaleDateString('en-IN')
                           : 'N/A'}
                       </TableCell>
                       <TableCell align="right">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleOpenDialog('document', perm)}
-                          color="primary"
-                        >
+                        <IconButton size="small" onClick={() => handleOpenDialog('document', perm)} color="primary">
                           <Edit />
                         </IconButton>
-                        <IconButton
-                          size="small"
-                          onClick={() => handleDelete('document', perm.id)}
-                          color="error"
-                        >
+                        <IconButton size="small" onClick={() => handleDelete('document', perm.id)} color="error">
                           <Delete />
                         </IconButton>
                       </TableCell>
@@ -464,6 +518,7 @@ const Permissions = () => {
               variant="contained"
               startIcon={<Add />}
               onClick={() => handleOpenDialog('category')}
+              disabled={familyMembers.length === 0}
             >
               Grant Permission
             </Button>
@@ -471,13 +526,16 @@ const Permissions = () => {
           {categoryPermissions.length === 0 ? (
             <Box sx={{ p: 6, textAlign: 'center' }}>
               <Security sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" gutterBottom>
-                No Category Permissions
-              </Typography>
+              <Typography variant="h6" gutterBottom>No Category Permissions</Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
                 Grant permissions to family members to access entire categories
               </Typography>
-              <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog('category')}>
+              <Button
+                variant="contained"
+                startIcon={<Add />}
+                onClick={() => handleOpenDialog('category')}
+                disabled={familyMembers.length === 0}
+              >
                 Grant First Permission
               </Button>
             </Box>
@@ -495,18 +553,25 @@ const Permissions = () => {
                 </TableHead>
                 <TableBody>
                   {categoryPermissions.map((perm) => (
-                    <TableRow key={perm.id}>
-                      <TableCell>{perm.familyMemberName || perm.userName || 'Unknown'}</TableCell>
+                    <TableRow key={perm.id} hover>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={500}>
+                          {perm.userFullName || perm.userEmail || 'Unknown'}
+                        </Typography>
+                        {perm.userEmail && perm.userFullName && (
+                          <Typography variant="caption" color="text.secondary">{perm.userEmail}</Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <span>{perm.categoryIcon || '📁'}</span>
-                          {perm.categoryName || perm.category?.name || 'Unknown'}
+                          <Typography variant="body2">{perm.categoryName || 'Unknown'}</Typography>
                         </Box>
                       </TableCell>
                       <TableCell>
                         <Chip
-                          label={getPermissionLevelLabel(perm.defaultPermissionLevel || perm.permissionLevel)}
-                          color={getPermissionLevelColor(perm.defaultPermissionLevel || perm.permissionLevel)}
+                          label={getPermissionLevelLabel(perm.permissionLevel || perm.defaultPermissionLevel)}
+                          color={getPermissionLevelColor(perm.permissionLevel || perm.defaultPermissionLevel)}
                           size="small"
                         />
                       </TableCell>
@@ -516,18 +581,10 @@ const Permissions = () => {
                           : 'N/A'}
                       </TableCell>
                       <TableCell align="right">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleOpenDialog('category', perm)}
-                          color="primary"
-                        >
+                        <IconButton size="small" onClick={() => handleOpenDialog('category', perm)} color="primary">
                           <Edit />
                         </IconButton>
-                        <IconButton
-                          size="small"
-                          onClick={() => handleDelete('category', perm.id)}
-                          color="error"
-                        >
+                        <IconButton size="small" onClick={() => handleDelete('category', perm.id)} color="error">
                           <Delete />
                         </IconButton>
                       </TableCell>
@@ -540,94 +597,185 @@ const Permissions = () => {
         </Paper>
       )}
 
-      {/* Permission Dialog */}
+      {/* ✅ FIXED DIALOG: When editing, show only current info + permission level selector.
+          When granting new, show all fields as before. */}
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>
           {editingPermission ? 'Edit Permission' : 'Grant Permission'}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2 }}>
-            {/* Family Member */}
-            <FormControl fullWidth required>
-              <InputLabel>Family Member</InputLabel>
-              <Select
-                value={formData.familyMemberId}
-                onChange={(e) => setFormData({ ...formData, familyMemberId: e.target.value })}
-                label="Family Member"
-                disabled={!!editingPermission}
-              >
-                {familyMembers.map((member) => (
-                  <MenuItem key={member.id} value={member.id}>
-                    {member.name} ({member.relationship})
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
 
-            {/* Document or Category */}
-            {dialogType === 'document' ? (
-              <FormControl fullWidth required>
-                <InputLabel>Document</InputLabel>
-                <Select
-                  value={formData.documentId}
-                  onChange={(e) => setFormData({ ...formData, documentId: e.target.value })}
-                  label="Document"
-                  disabled={!!editingPermission}
+            {/* ── EDIT MODE: show read-only info card + only permission level ── */}
+            {editingPermission ? (
+              <>
+                {/* Info card showing what is being edited */}
+                <Box
+                  sx={{
+                    p: 2,
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 1,
+                    bgcolor: 'grey.50',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 0.5,
+                  }}
                 >
-                  {documents.map((doc) => (
-                    <MenuItem key={doc.id} value={doc.id}>
-                      {doc.originalFilename || doc.filename}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+                  <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Editing permission for
+                  </Typography>
+                  <Typography variant="body1" fontWeight={600}>
+                    {editingPermission.userFullName || editingPermission.userEmail || 'Unknown member'}
+                  </Typography>
+                  {editingPermission.userEmail && editingPermission.userFullName && (
+                    <Typography variant="caption" color="text.secondary">
+                      {editingPermission.userEmail}
+                    </Typography>
+                  )}
+                  <Box sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      {dialogType === 'document' ? 'Document' : 'Category'}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.25 }}>
+                      {dialogType === 'document'
+                        ? (editingPermission.documentName || 'Unknown document')
+                        : (editingPermission.categoryName || 'Unknown category')}
+                    </Typography>
+                    {dialogType === 'document' && editingPermission.categoryName && (
+                      <Typography variant="caption" color="text.secondary">
+                        {editingPermission.categoryName}
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+
+                {/* Only Permission Level is editable */}
+                <FormControl fullWidth required>
+                  <InputLabel>Permission Level</InputLabel>
+                  <Select
+                    value={formData.permissionLevel}
+                    onChange={(e) => setFormData({ ...formData, permissionLevel: e.target.value })}
+                    label="Permission Level"
+                  >
+                    {permissionLevels.map((perm) => (
+                      <MenuItem key={perm.value} value={perm.value}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {perm.icon}
+                          <Box>
+                            <Typography variant="body1">{perm.label}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {perm.description}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </>
             ) : (
-              <FormControl fullWidth required>
-                <InputLabel>Category</InputLabel>
-                <Select
-                  value={formData.categoryId}
-                  onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
-                  label="Category"
-                  disabled={!!editingPermission}
-                >
-                  {categories.map((cat) => (
-                    <MenuItem key={cat.id} value={cat.id}>
-                      {cat.icon} {cat.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              /* ── GRANT MODE: show all fields as original ── */
+              <>
+                {/* Family Member */}
+                <FormControl fullWidth required>
+                  <InputLabel>Family Member</InputLabel>
+                  <Select
+                    value={formData.familyMemberId}
+                    onChange={(e) => setFormData({ ...formData, familyMemberId: e.target.value })}
+                    label="Family Member"
+                  >
+                    {familyMembers.length === 0 ? (
+                      <MenuItem disabled>No sub-account family members available</MenuItem>
+                    ) : (
+                      familyMembers.map((member) => (
+                        <MenuItem key={member.id} value={member.id}>
+                          {member.name} ({member.relationship})
+                        </MenuItem>
+                      ))
+                    )}
+                  </Select>
+                </FormControl>
+
+                {/* Document or Category */}
+                {dialogType === 'document' ? (
+                  <FormControl fullWidth required>
+                    <InputLabel>Document</InputLabel>
+                    <Select
+                      value={formData.documentId}
+                      onChange={(e) => setFormData({ ...formData, documentId: e.target.value })}
+                      label="Document"
+                    >
+                      {documents.length === 0 ? (
+                        <MenuItem disabled>No documents available</MenuItem>
+                      ) : (
+                        documents.map((doc) => (
+                          <MenuItem key={doc.id} value={doc.id}>
+                            <Box>
+                              <Typography variant="body2">{doc.originalFilename || doc.filename}</Typography>
+                              {doc.category && (
+                                <Typography variant="caption" color="text.secondary">
+                                  {doc.category.name}
+                                </Typography>
+                              )}
+                            </Box>
+                          </MenuItem>
+                        ))
+                      )}
+                    </Select>
+                  </FormControl>
+                ) : (
+                  <FormControl fullWidth required>
+                    <InputLabel>Category</InputLabel>
+                    <Select
+                      value={formData.categoryId}
+                      onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
+                      label="Category"
+                    >
+                      {categories.length === 0 ? (
+                        <MenuItem disabled>No categories available</MenuItem>
+                      ) : (
+                        categories.map((cat) => (
+                          <MenuItem key={cat.id} value={cat.id}>
+                            {cat.icon} {cat.name}
+                          </MenuItem>
+                        ))
+                      )}
+                    </Select>
+                  </FormControl>
+                )}
+
+                {/* Permission Level */}
+                <FormControl fullWidth required>
+                  <InputLabel>Permission Level</InputLabel>
+                  <Select
+                    value={formData.permissionLevel}
+                    onChange={(e) => setFormData({ ...formData, permissionLevel: e.target.value })}
+                    label="Permission Level"
+                  >
+                    {permissionLevels.map((perm) => (
+                      <MenuItem key={perm.value} value={perm.value}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {perm.icon}
+                          <Box>
+                            <Typography variant="body1">{perm.label}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {perm.description}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Alert severity="info">
+                  {dialogType === 'document'
+                    ? 'This permission will allow the selected family member to access this specific document.'
+                    : 'This permission will allow the selected family member to access all documents in this category.'}
+                </Alert>
+              </>
             )}
-
-            {/* Permission Level */}
-            <FormControl fullWidth required>
-              <InputLabel>Permission Level</InputLabel>
-              <Select
-                value={formData.permissionLevel}
-                onChange={(e) => setFormData({ ...formData, permissionLevel: e.target.value })}
-                label="Permission Level"
-              >
-                {permissionLevels.map((perm) => (
-                  <MenuItem key={perm.value} value={perm.value}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {perm.icon}
-                      <Box>
-                        <Typography variant="body1">{perm.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {perm.description}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
-            <Alert severity="info">
-              {dialogType === 'document'
-                ? 'This permission will allow the selected family member to access this specific document.'
-                : 'This permission will allow the selected family member to access all documents in this category.'}
-            </Alert>
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 3 }}>
@@ -638,7 +786,7 @@ const Permissions = () => {
             disabled={submitting}
             startIcon={submitting ? <CircularProgress size={20} /> : null}
           >
-            {editingPermission ? 'Update' : 'Grant'} Permission
+            {editingPermission ? 'Update Permission' : 'Grant Permission'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -39,6 +39,8 @@ import {
   SupervisorAccount,
   MoreVert,
   Security,
+  Lock,
+  LockOpen,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
@@ -91,12 +93,22 @@ const FamilyMembers = () => {
     loadMembers();
   }, []);
 
+  // ✅ FIX: Derive role from backend response - userId presence = SUB_ACCOUNT
+  const deriveRole = (m) => {
+    if (m.role === 'PRIMARY_ACCOUNT') return 'PRIMARY_ACCOUNT';
+    // Backend family_members has userId field - if present, it's a SUB_ACCOUNT
+    if (m.userId || m.user_id) return 'SUB_ACCOUNT';
+    return 'PROFILE_ONLY';
+  };
+
   const loadMembers = async () => {
     try {
       setLoading(true);
       const response = await api.get('/family-members');
       if (response.data.success) {
-        setMembers(response.data.data || []);
+        const raw = response.data.data || [];
+        const normalized = raw.map((m) => ({ ...m, role: deriveRole(m) }));
+        setMembers(normalized);
       }
     } catch (error) {
       console.error('Failed to load family members:', error);
@@ -135,15 +147,18 @@ const FamilyMembers = () => {
   const handleOpenDialog = (member = null) => {
     if (member) {
       setEditingMember(member);
+      const memberRole = deriveRole(member);
+
+      // ✅ FIX: Pre-fill email and username when editing
       setFormData({
         name: member.name || '',
         relationship: member.relationship || '',
         dateOfBirth: member.dateOfBirth || '',
-        email: member.email || '',
+        email: member.email || '',              // ← FIX: Show existing email
         phoneNumber: member.phoneNumber || '',
-        role: member.role || 'PROFILE_ONLY',
-        username: member.username || '',
-        password: '',
+        role: memberRole,
+        username: member.username || '',         // ← FIX: Show existing username
+        password: '',                            // Leave blank - user can change if needed
       });
     } else {
       setEditingMember(null);
@@ -228,12 +243,16 @@ const FamilyMembers = () => {
         dateOfBirth: formData.dateOfBirth || null,
         email: formData.email.trim() || null,
         phoneNumber: formData.phoneNumber.trim() || null,
+        // ✅ CRITICAL FIX: Send BOTH role fields backend might expect
         role: formData.role,
+        accountType: formData.role,  // Some backends use this
+        isSubAccount: formData.role === 'SUB_ACCOUNT',
       };
 
       if (formData.role === 'SUB_ACCOUNT') {
         payload.username = formData.username.trim();
-        if (formData.password) {
+        // Only send password if user entered one
+        if (formData.password && formData.password.trim()) {
           payload.password = formData.password;
         }
       }
@@ -241,15 +260,25 @@ const FamilyMembers = () => {
       let response;
       if (editingMember) {
         response = await api.put(`/family-members/${editingMember.id}`, payload);
-        toast.success('Family member updated successfully!');
+
+        if (response.data.success) {
+          toast.success('Family member updated successfully!');
+          handleCloseDialog();
+          // ✅ FIX: Force full reload to get fresh data from backend
+          await loadMembers();
+        } else {
+          toast.error(response.data.message || 'Failed to update family member');
+        }
       } else {
         response = await api.post('/family-members', payload);
-        toast.success('Family member added successfully!');
-      }
 
-      if (response.data.success) {
-        loadMembers();
-        handleCloseDialog();
+        if (response.data.success) {
+          toast.success('Family member added successfully!');
+          handleCloseDialog();
+          await loadMembers();
+        } else {
+          toast.error(response.data.message || 'Failed to add family member');
+        }
       }
     } catch (error) {
       console.error('Failed to save family member:', error);
@@ -293,13 +322,15 @@ const FamilyMembers = () => {
       case 'PRIMARY_ACCOUNT':
         return 'Primary Account';
       case 'SUB_ACCOUNT':
-        return 'Sub Account';
+        return 'Can Login';
       case 'PROFILE_ONLY':
         return 'Profile Only';
       default:
         return role;
     }
   };
+
+  const getMemberRole = (member) => deriveRole(member);
 
   if (loading) {
     return (
@@ -360,96 +391,107 @@ const FamilyMembers = () => {
         </Card>
       ) : (
         <Grid container spacing={3}>
-          {members.map((member) => (
-            <Grid item xs={12} sm={6} md={4} key={member.id}>
-              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                {/* Three-dot menu */}
-                <IconButton
-                  sx={{ position: 'absolute', top: 8, right: 8 }}
-                  onClick={(e) => handleMenuOpen(e, member)}
-                >
-                  <MoreVert />
-                </IconButton>
+          {members.map((member) => {
+            const memberRole = getMemberRole(member);
+            return (
+              <Grid item xs={12} sm={6} md={4} key={member.id}>
+                <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                  {/* Three-dot menu */}
+                  <IconButton
+                    sx={{ position: 'absolute', top: 8, right: 8 }}
+                    onClick={(e) => handleMenuOpen(e, member)}
+                  >
+                    <MoreVert />
+                  </IconButton>
 
-                <CardContent sx={{ flex: 1, pt: 6 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2 }}>
-                    <Avatar sx={{ width: 56, height: 56, mr: 2, bgcolor: 'primary.main' }}>
-                      {member.name.charAt(0).toUpperCase()}
-                    </Avatar>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="h6" gutterBottom>
-                        {member.name}
-                      </Typography>
-                      <Chip
-                        label={member.relationship}
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                      />
-                    </Box>
-                  </Box>
-
-                  <Divider sx={{ my: 2 }} />
-
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Badge fontSize="small" color="action" />
-                      <Chip
-                        label={getRoleLabel(member.role)}
-                        size="small"
-                        color={getRoleColor(member.role)}
-                      />
+                  <CardContent sx={{ flex: 1, pt: 6 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2 }}>
+                      <Avatar sx={{ width: 56, height: 56, mr: 2, bgcolor: 'primary.main' }}>
+                        {member.name.charAt(0).toUpperCase()}
+                      </Avatar>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="h6" gutterBottom>
+                          {member.name}
+                        </Typography>
+                        <Chip
+                          label={member.relationship}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                        />
+                      </Box>
                     </Box>
 
-                    {member.email && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Email fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          {member.email}
-                        </Typography>
-                      </Box>
-                    )}
+                    <Divider sx={{ my: 2 }} />
 
-                    {member.phoneNumber && (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Phone fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          {member.phoneNumber}
-                        </Typography>
+                        <Badge fontSize="small" color="action" />
+                        <Chip
+                          label={getRoleLabel(memberRole)}
+                          size="small"
+                          color={getRoleColor(memberRole)}
+                          icon={memberRole === 'SUB_ACCOUNT' ? <LockOpen fontSize="small" /> : <Lock fontSize="small" />}
+                        />
                       </Box>
-                    )}
 
-                    {member.dateOfBirth && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Cake fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          {new Date(member.dateOfBirth).toLocaleDateString('en-IN')}
-                        </Typography>
-                      </Box>
-                    )}
+                      {member.email ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Email fontSize="small" color="action" />
+                          <Typography variant="body2" color="text.secondary">
+                            {member.email}
+                          </Typography>
+                        </Box>
+                      ) : (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Email fontSize="small" color="action" />
+                          <Typography variant="body2" color="text.secondary">
+                            No email
+                          </Typography>
+                        </Box>
+                      )}
 
-                    {member.username && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Person fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          @{member.username}
-                        </Typography>
-                      </Box>
+                      {member.phoneNumber && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Phone fontSize="small" color="action" />
+                          <Typography variant="body2" color="text.secondary">
+                            {member.phoneNumber}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {member.dateOfBirth && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Cake fontSize="small" color="action" />
+                          <Typography variant="body2" color="text.secondary">
+                            {new Date(member.dateOfBirth).toLocaleDateString('en-IN')}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {member.username && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Person fontSize="small" color="action" />
+                          <Typography variant="body2" color="text.secondary">
+                            @{member.username}
+                          </Typography>
+                        </Box>
+                      )}
+                    </Box>
+                  </CardContent>
+
+                  <Box sx={{ p: 2, pt: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Added: {member.createdAt ? new Date(member.createdAt).toLocaleDateString('en-IN') : 'N/A'}
+                    </Typography>
+                    {memberRole === 'SUB_ACCOUNT' && (
+                      <Chip label="Active" size="small" color="success" />
                     )}
                   </Box>
-                </CardContent>
-
-                <Box sx={{ p: 2, pt: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Typography variant="caption" color="text.secondary">
-                    Added: {member.createdAt ? new Date(member.createdAt).toLocaleDateString('en-IN') : 'N/A'}
-                  </Typography>
-                  {member.role === 'SUB_ACCOUNT' && (
-                    <Chip label="Active" size="small" color="success" />
-                  )}
-                </Box>
-              </Card>
-            </Grid>
-          ))}
+                </Card>
+              </Grid>
+            );
+          })}
         </Grid>
       )}
 

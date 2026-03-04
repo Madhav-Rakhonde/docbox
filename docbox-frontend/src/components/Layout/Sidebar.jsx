@@ -22,8 +22,9 @@ import {
   Settings,
   CloudOff,
   Notifications,
-  SupervisorAccount,
   Security,
+  FolderShared, // ✅ ADDED for Family Documents
+  CardGiftcard, // ✅ ADDED for Eligible Schemes
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -37,6 +38,12 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
     { text: 'Documents', icon: <Description />, path: '/documents' },
     { text: 'Analytics', icon: <Analytics />, path: '/analytics' },
     { text: 'Family', icon: <People />, path: '/family' },
+    // ✅ ADDED: Family Documents
+    { 
+      text: 'Family Documents', 
+      icon: <FolderShared />, 
+      path: '/family-documents' 
+    },
     {
       text: 'Notifications',
       icon: (
@@ -45,6 +52,12 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
         </Badge>
       ),
       path: '/notifications',
+    },
+    // ✅ ADDED: Eligible Schemes
+    { 
+      text: 'Eligible Schemes', 
+      icon: <CardGiftcard />, 
+      path: '/schemes' 
     },
     { text: 'Settings', icon: <Settings />, path: '/settings' },
     { text: 'Permissions', icon: <Security />, path: '/permissions' },

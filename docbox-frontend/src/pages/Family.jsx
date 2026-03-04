@@ -41,8 +41,7 @@ const Family = () => {
     dateOfBirth: '',
     email: '',
     phoneNumber: '',
-    role: 'PROFILE_ONLY',
-    username: '',
+    accountType: 'profile_only',
     password: '',
   });
   const [formErrors, setFormErrors] = useState({});
@@ -65,9 +64,17 @@ const Family = () => {
     'Other',
   ];
 
-  const roles = [
-    { value: 'PROFILE_ONLY', label: 'Profile Only (No Login)', description: 'Can be linked to documents but cannot login' },
-    { value: 'SUB_ACCOUNT', label: 'Sub Account (Can Login)', description: 'Can login and view their documents' },
+  const accountTypes = [
+    { 
+      value: 'profile_only', 
+      label: 'Profile Only (No Login)', 
+      description: 'Can be linked to documents but cannot login' 
+    },
+    { 
+      value: 'sub_account', 
+      label: 'Sub Account (Can Login)', 
+      description: 'Can login and view their documents using email' 
+    },
   ];
 
   useEffect(() => {
@@ -89,17 +96,16 @@ const Family = () => {
     }
   };
 
-  // ✅ FIXED: Real edit handler - NO MORE "COMING SOON"!
+  // ✅ FIXED: Real edit handler with proper accountType mapping
   const handleEdit = (member) => {
     setSelectedMember(member);
     setFormData({
       name: member.name || '',
       relationship: member.relationship || '',
       dateOfBirth: member.dateOfBirth || '',
-      email: member.email || '',
-      phoneNumber: member.phoneNumber || '',
-      role: member.role || 'PROFILE_ONLY',
-      username: member.username || '',
+      email: member.user?.email || '',
+      phoneNumber: member.user?.phoneNumber || '',
+      accountType: member.accountType || 'profile_only',
       password: '',
     });
     setFormErrors({});
@@ -129,7 +135,7 @@ const Family = () => {
     }
   };
 
-  // ✅ FIXED: Real permissions handler - NO MORE "COMING SOON"!
+  // ✅ FIXED: Real permissions handler
   const handleManagePermissions = (member) => {
     navigate(`/permissions?member=${member.id}`);
   };
@@ -145,10 +151,14 @@ const Family = () => {
       errors.relationship = 'Relationship is required';
     }
 
-    if (formData.role === 'SUB_ACCOUNT') {
-      if (!formData.username.trim()) {
-        errors.username = 'Username is required for sub accounts';
+    // ✅ UPDATED: Validation for sub_account
+    if (formData.accountType === 'sub_account') {
+      if (!formData.email.trim()) {
+        errors.email = 'Email is required for sub accounts';
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+        errors.email = 'Invalid email format';
       }
+      
       if (!selectedMember && !formData.password) {
         errors.password = 'Password is required for new sub accounts';
       }
@@ -157,7 +167,7 @@ const Family = () => {
       }
     }
 
-    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+    if (formData.email && formData.accountType !== 'sub_account' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       errors.email = 'Invalid email format';
     }
 
@@ -178,17 +188,18 @@ const Family = () => {
     try {
       setSubmitting(true);
 
+      // ✅ UPDATED: Payload structure matching backend
       const payload = {
         name: formData.name.trim(),
         relationship: formData.relationship,
         dateOfBirth: formData.dateOfBirth || null,
-        email: formData.email.trim() || null,
-        phoneNumber: formData.phoneNumber.trim() || null,
-        role: formData.role,
+        accountType: formData.accountType,
       };
 
-      if (formData.role === 'SUB_ACCOUNT') {
-        payload.username = formData.username.trim();
+      // ✅ Only include email/phone/password for sub_account
+      if (formData.accountType === 'sub_account') {
+        payload.email = formData.email.trim();
+        payload.phoneNumber = formData.phoneNumber.trim() || null;
         if (formData.password) {
           payload.password = formData.password;
         }
@@ -206,8 +217,7 @@ const Family = () => {
           dateOfBirth: '',
           email: '',
           phoneNumber: '',
-          role: 'PROFILE_ONLY',
-          username: '',
+          accountType: 'profile_only',
           password: '',
         });
         loadMembers();
@@ -349,40 +359,44 @@ const Family = () => {
               fullWidth
             />
 
-            {/* Role */}
+            {/* Account Type - UPDATED */}
             <FormControl fullWidth required>
               <InputLabel>Account Type</InputLabel>
               <Select
-                value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                value={formData.accountType}
+                onChange={(e) => setFormData({ ...formData, accountType: e.target.value })}
                 label="Account Type"
               >
-                {roles.map((role) => (
-                  <MenuItem key={role.value} value={role.value}>
+                {accountTypes.map((type) => (
+                  <MenuItem key={type.value} value={type.value}>
                     <Box>
-                      <Typography variant="body1">{role.label}</Typography>
+                      <Typography variant="body1">{type.label}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {role.description}
+                        {type.description}
                       </Typography>
                     </Box>
                   </MenuItem>
                 ))}
               </Select>
+              <FormHelperText>
+                Choose whether this person can login or just have a profile
+              </FormHelperText>
             </FormControl>
 
-            {/* Sub Account Fields */}
-            {formData.role === 'SUB_ACCOUNT' && (
+            {/* Sub Account Fields - UPDATED */}
+            {formData.accountType === 'sub_account' && (
               <>
                 <Alert severity="info">
-                  Sub accounts can login and view documents shared with them
+                  Sub accounts can login using their email and view documents shared with them
                 </Alert>
 
                 <TextField
-                  label="Username"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  error={!!formErrors.username}
-                  helperText={formErrors.username || 'Used for login'}
+                  label="Email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  error={!!formErrors.email}
+                  helperText={formErrors.email || 'Used for login (username will be email)'}
                   fullWidth
                   required
                 />
@@ -395,35 +409,49 @@ const Family = () => {
                   error={!!formErrors.password}
                   helperText={formErrors.password || 'Leave blank to keep current password'}
                   fullWidth
+                  required={!selectedMember}
+                />
+
+                <TextField
+                  label="Phone Number"
+                  value={formData.phoneNumber}
+                  onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                  error={!!formErrors.phoneNumber}
+                  helperText={formErrors.phoneNumber || 'Optional - Format: 10 digits'}
+                  fullWidth
                 />
               </>
             )}
 
-            <Divider />
+            {/* Contact Info for Profile Only - OPTIONAL */}
+            {formData.accountType === 'profile_only' && (
+              <>
+                <Divider />
 
-            {/* Contact Info */}
-            <Typography variant="subtitle2" color="text.secondary">
-              Contact Information (Optional)
-            </Typography>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Contact Information (Optional)
+                </Typography>
 
-            <TextField
-              label="Email"
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              error={!!formErrors.email}
-              helperText={formErrors.email}
-              fullWidth
-            />
+                <TextField
+                  label="Email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  error={!!formErrors.email}
+                  helperText={formErrors.email}
+                  fullWidth
+                />
 
-            <TextField
-              label="Phone Number"
-              value={formData.phoneNumber}
-              onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-              error={!!formErrors.phoneNumber}
-              helperText={formErrors.phoneNumber || 'Format: 10 digits'}
-              fullWidth
-            />
+                <TextField
+                  label="Phone Number"
+                  value={formData.phoneNumber}
+                  onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                  error={!!formErrors.phoneNumber}
+                  helperText={formErrors.phoneNumber || 'Format: 10 digits'}
+                  fullWidth
+                />
+              </>
+            )}
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 3 }}>

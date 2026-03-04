@@ -30,11 +30,11 @@ const Dashboard = () => {
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-      
+
       // Load all data in parallel
       const [statsRes, docsRes, expiryRes] = await Promise.all([
         analyticsService.getDashboardStats().catch(() => null),
-        documentService.getDocuments(0, 5).catch(() => ({ data: { content: [] } })),
+        documentService.getDocuments(0, 5).catch(() => null),
         analyticsService.getExpiryInsights().catch(() => null),
       ]);
 
@@ -42,8 +42,30 @@ const Dashboard = () => {
         setStats(statsRes.data);
       }
 
-      if (docsRes?.success) {
-        setRecentDocs(docsRes.data.content || []);
+      // ✅ FIX: Handle all possible response structures
+      if (docsRes) {
+        let docs = [];
+
+        if (docsRes.success && docsRes.data) {
+          const data = docsRes.data;
+          // Try all possible locations where documents might be
+          docs =
+            data.documents ||    // { documents: [...] }
+            data.content ||      // { content: [...] }  (Spring Page)
+            data.data?.documents ||
+            data.data?.content ||
+            (Array.isArray(data) ? data : []);
+        } else if (docsRes.data) {
+          const data = docsRes.data;
+          docs =
+            data.documents ||
+            data.content ||
+            (Array.isArray(data) ? data : []);
+        } else if (Array.isArray(docsRes)) {
+          docs = docsRes;
+        }
+
+        setRecentDocs(Array.isArray(docs) ? docs : []);
       }
 
       if (expiryRes?.success) {

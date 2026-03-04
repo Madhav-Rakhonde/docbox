@@ -22,6 +22,10 @@ import {
   Security,
   CheckCircle,
   Pending,
+  LockOpen,
+  Lock,
+  PersonAdd,
+  Person,
 } from '@mui/icons-material';
 
 const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
@@ -73,6 +77,18 @@ const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
     }
   };
 
+  // ✅ Determine if member is a sub-account
+  const isSubAccount = member.isSubAccount || member.accountType === 'sub_account' || member.user;
+
+  // ✅ Get display email
+  const displayEmail = member.user?.email || member.email || 'No email';
+
+  // ✅ Get display phone
+  const displayPhone = member.user?.phoneNumber || member.phoneNumber;
+
+  // ✅ Get account status
+  const accountStatus = member.user?.isActive ? 'Active' : (member.status || 'Active');
+
   return (
     <>
       <Card
@@ -93,11 +109,11 @@ const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
               sx={{
                 width: 56,
                 height: 56,
-                bgcolor: 'primary.main',
+                bgcolor: isSubAccount ? 'success.main' : 'primary.main',
                 fontSize: '1.25rem',
               }}
             >
-              {getInitials(member.fullName || member.name || 'U')}
+              {getInitials(member.name || member.fullName || 'U')}
             </Avatar>
             <IconButton size="small" onClick={handleMenuOpen}>
               <MoreVert />
@@ -105,7 +121,7 @@ const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
           </Box>
 
           <Typography variant="h6" gutterBottom noWrap>
-            {member.fullName || member.name || 'Unknown'}
+            {member.name || member.fullName || 'Unknown'}
           </Typography>
 
           <Box sx={{ display: 'flex', gap: 0.5, mb: 2, flexWrap: 'wrap' }}>
@@ -115,28 +131,60 @@ const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
               color="primary"
               variant="outlined"
             />
-            <Chip
-              icon={getStatusIcon(member.status)}
-              label={member.status || 'Active'}
-              size="small"
-              color={getStatusColor(member.status)}
-            />
+            
+            {/* ✅ Account Type Indicator */}
+            {isSubAccount ? (
+              <Chip
+                icon={<LockOpen />}
+                label="Can Login"
+                size="small"
+                color="success"
+                variant="outlined"
+              />
+            ) : (
+              <Chip
+                icon={<Lock />}
+                label="Profile Only"
+                size="small"
+                color="default"
+                variant="outlined"
+              />
+            )}
+
+            {/* Status Chip */}
+            {member.user && (
+              <Chip
+                icon={getStatusIcon(accountStatus)}
+                label={accountStatus}
+                size="small"
+                color={getStatusColor(accountStatus)}
+              />
+            )}
           </Box>
 
+          {/* Email */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <Email fontSize="small" color="action" />
             <Typography variant="body2" color="text.secondary" noWrap>
-              {member.email || 'No email'}
+              {displayEmail}
             </Typography>
           </Box>
 
-          {member.phoneNumber && (
+          {/* Phone */}
+          {displayPhone && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Phone fontSize="small" color="action" />
               <Typography variant="body2" color="text.secondary">
-                {member.phoneNumber}
+                {displayPhone}
               </Typography>
             </Box>
+          )}
+
+          {/* Date of Birth */}
+          {member.dateOfBirth && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+              Born: {new Date(member.dateOfBirth).toLocaleDateString()}
+            </Typography>
           )}
         </CardContent>
 
@@ -155,12 +203,16 @@ const MemberCard = ({ member, onEdit, onDelete, onManagePermissions }) => {
           </ListItemIcon>
           <ListItemText>Edit Details</ListItemText>
         </MenuItem>
-        <MenuItem onClick={() => handleAction(() => onManagePermissions(member))}>
-          <ListItemIcon>
-            <Security fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Manage Permissions</ListItemText>
-        </MenuItem>
+        
+        {isSubAccount && (
+          <MenuItem onClick={() => handleAction(() => onManagePermissions(member))}>
+            <ListItemIcon>
+              <Security fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Manage Permissions</ListItemText>
+          </MenuItem>
+        )}
+        
         <MenuItem onClick={() => handleAction(() => onDelete(member))} sx={{ color: 'error.main' }}>
           <ListItemIcon>
             <Delete fontSize="small" color="error" />

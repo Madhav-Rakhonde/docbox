@@ -31,6 +31,7 @@ import {
   Warning,
   Info,
   CheckCircle,
+  CardGiftcard, // ✅ ADDED for schemes
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import api from '../services/api';
@@ -139,9 +140,9 @@ const Notifications = () => {
       handleMarkAsRead(notification.id);
     }
     // Handle navigation based on notification type
-    // if (notification.link) {
-    //   navigate(notification.link);
-    // }
+    if (notification.link) {
+      window.location.href = notification.link;
+    }
   };
 
   const getNotificationIcon = (type) => {
@@ -157,6 +158,9 @@ const Notifications = () => {
         return <PersonAdd sx={{ color: 'primary.main' }} />;
       case 'PERMISSION_GRANTED':
         return <CheckCircle sx={{ color: 'success.main' }} />;
+      // ✅ ADDED: Scheme discovery icon
+      case 'SCHEME_DISCOVERY':
+        return <CardGiftcard sx={{ color: 'success.main' }} />;
       default:
         return <Info sx={{ color: 'info.main' }} />;
     }
@@ -172,6 +176,9 @@ const Notifications = () => {
         return '#d4edda';
       case 'FAMILY_MEMBER_ADDED':
         return '#cce5ff';
+      // ✅ ADDED: Scheme discovery color (green)
+      case 'SCHEME_DISCOVERY':
+        return '#d4edda';
       default:
         return '#ffffff';
     }
@@ -182,10 +189,14 @@ const Notifications = () => {
     if (tabValue === 1) return !notif.isRead; // Unread
     if (tabValue === 2) return notif.type === 'DOCUMENT_EXPIRING'; // Expiry Alerts
     if (tabValue === 3) return notif.type === 'DOCUMENT_SHARED'; // Shares
+    // ✅ ADDED: Schemes filter
+    if (tabValue === 4) return notif.type === 'SCHEME_DISCOVERY'; // Schemes
     return true;
   });
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+  // ✅ ADDED: Scheme count
+  const schemeCount = notifications.filter((n) => n.type === 'SCHEME_DISCOVERY' && !n.isRead).length;
 
   if (loading && notifications.length === 0) {
     return (
@@ -207,7 +218,7 @@ const Notifications = () => {
             Notifications
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Stay updated with your document activity
+            Stay updated with your document activity and eligible schemes
           </Typography>
         </Box>
       </Box>
@@ -252,6 +263,14 @@ const Notifications = () => {
           />
           <Tab label="EXPIRY ALERTS" />
           <Tab label="SHARES" />
+          {/* ✅ ADDED: Schemes tab */}
+          <Tab
+            label={
+              <Badge badgeContent={schemeCount} color="success">
+                SCHEMES
+              </Badge>
+            }
+          />
         </Tabs>
       </Paper>
 
@@ -266,6 +285,8 @@ const Notifications = () => {
             <Typography variant="body2" color="text.secondary">
               {tabValue === 1
                 ? 'You have no unread notifications'
+                : tabValue === 4
+                ? 'No scheme discoveries yet. Upload your documents to start discovering eligible schemes!'
                 : 'You have no notifications at this time'}
             </Typography>
           </Box>
@@ -281,7 +302,7 @@ const Notifications = () => {
                     cursor: 'pointer',
                     '&:hover': { bgcolor: 'action.hover' },
                     borderLeft: notification.isRead ? 'none' : '4px solid',
-                    borderLeftColor: 'primary.main',
+                    borderLeftColor: notification.type === 'SCHEME_DISCOVERY' ? 'success.main' : 'primary.main',
                   }}
                   onClick={() => handleNotificationClick(notification)}
                   secondaryAction={
@@ -305,7 +326,12 @@ const Notifications = () => {
                           {notification.title}
                         </Typography>
                         {!notification.isRead && (
-                          <Chip label="NEW" size="small" color="primary" sx={{ height: 20 }} />
+                          <Chip 
+                            label="NEW" 
+                            size="small" 
+                            color={notification.type === 'SCHEME_DISCOVERY' ? 'success' : 'primary'} 
+                            sx={{ height: 20 }} 
+                          />
                         )}
                       </Box>
                     }
