@@ -4,6 +4,10 @@ import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
 
+/**
+ * In-App Notification Entity
+ * ✅ UPDATED: Added metadata field for scheme details
+ */
 @Entity
 @Table(name = "in_app_notifications")
 @Data
@@ -18,7 +22,7 @@ public class InAppNotification {
     private User user;
 
     @Column(nullable = false, length = 50)
-    private String type; // DOCUMENT_UPLOADED, DOCUMENT_SHARED, etc.
+    private String type; // DOCUMENT_UPLOADED, DOCUMENT_SHARED, SCHEME_DISCOVERY, etc.
 
     @Column(nullable = false)
     private String title;
@@ -27,6 +31,10 @@ public class InAppNotification {
     private String message;
 
     private String link; // URL to navigate to
+
+    // ✅ ADD THIS FIELD (if not already present)
+    @Column(columnDefinition = "TEXT")
+    private String metadata; // JSON data for scheme/document details
 
     @Column(name = "is_read")
     private Boolean isRead = false;

@@ -1,6 +1,7 @@
 package com.docbox.repository;
 
 import com.docbox.entity.*;
+import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -35,4 +36,7 @@ public interface SharedLinkRepository extends JpaRepository<SharedLink, Long> {
     @Modifying
     @Query("DELETE FROM SharedLink s WHERE s.document.id = :documentId")
     void deleteByDocumentId(@Param("documentId") Long documentId);
+
+    @Transactional
+    void deleteByDocument_Id(Long documentId);
 }

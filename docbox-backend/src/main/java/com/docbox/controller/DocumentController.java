@@ -112,7 +112,7 @@ public class DocumentController {
             result.put("document", buildDocumentResponse(document));
             result.put("detectedCategory", document.getCategory().getName());
 
-            String message = force
+            String message = Boolean.TRUE.equals(force)
                     ? "Duplicate uploaded successfully! Auto-detected as: " + document.getCategory().getName()
                     : "Document uploaded successfully! Auto-detected as: " + document.getCategory().getName();
 
@@ -187,8 +187,6 @@ public class DocumentController {
                 .contentLength(fileBytes.length)
                 .body(resource);
     }
-
-    // ❌ REMOVED: Thumbnail endpoint
 
     @GetMapping("/category/{categoryId}")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getDocumentsByCategory(@PathVariable Long categoryId) {
@@ -269,7 +267,7 @@ public class DocumentController {
     }
 
     /**
-     * Build document response object (NO THUMBNAIL)
+     * Build document response object (NO THUMBNAIL, NO QR)
      */
     private Map<String, Object> buildDocumentResponse(Document document) {
         Map<String, Object> data = new HashMap<>();
@@ -278,7 +276,7 @@ public class DocumentController {
         data.put("fileSize", document.getFileSize());
         data.put("fileType", document.getFileType());
         data.put("mimeType", document.getMimeType());
-        data.put("hasThumbnail", false); // ✅ Always false now
+        data.put("hasThumbnail", false);
 
         if (document.getCategory() != null) {
             Map<String, Object> category = new HashMap<>();
@@ -296,6 +294,7 @@ public class DocumentController {
                 familyMember.put("relationship", document.getFamilyMember().getRelationship());
                 data.put("familyMember", familyMember);
             } catch (Exception e) {
+                // ignore lazy-load failures
             }
         }
 

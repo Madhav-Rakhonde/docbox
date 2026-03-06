@@ -95,15 +95,10 @@ public class FamilyMemberService {
         member.setName(name);
         member.setRelationship(relationship);
 
-        // FamilyMember doesn't have email and phoneNumber fields - these should be removed
-        // or you need to add these fields to the FamilyMember entity
-
         if (dateOfBirth != null && !dateOfBirth.isEmpty()) {
             member.setDateOfBirth(LocalDate.parse(dateOfBirth));
         }
 
-        // FamilyMember entity doesn't have a 'role' field
-        // The role is determined by whether user is null or not
         member.setCreatedAt(LocalDateTime.now());
         member.setUpdatedAt(LocalDateTime.now());
 
@@ -135,19 +130,19 @@ public class FamilyMemberService {
             throw new PermissionDeniedException("Only primary account can create sub-accounts");
         }
 
-        // Check if email already exists (User entity uses email, not username)
+        // Check if email already exists
         if (userRepository.existsByEmail(email)) {
             throw new BadRequestException("Email already exists");
         }
 
         // Create user account for login
         User subAccountUser = new User();
-        subAccountUser.setFullName(name); // User entity has 'fullName', not 'name'
+        subAccountUser.setFullName(name);
         subAccountUser.setEmail(email);
-        subAccountUser.setPasswordHash(passwordEncoder.encode(password)); // User entity has 'passwordHash', not 'password'
+        subAccountUser.setPasswordHash(passwordEncoder.encode(password));
         subAccountUser.setPhoneNumber(phoneNumber);
         subAccountUser.setRole(UserRole.SUB_ACCOUNT);
-        subAccountUser.setPrimaryAccount(primaryAccount); // Set the User object, not ID
+        subAccountUser.setPrimaryAccount(primaryAccount);
         subAccountUser.setIsActive(true);
         subAccountUser.setEmailVerified(true);
         subAccountUser.setCreatedAt(LocalDateTime.now());
@@ -166,7 +161,6 @@ public class FamilyMemberService {
             member.setDateOfBirth(LocalDate.parse(dateOfBirth));
         }
 
-        // FamilyMember doesn't have 'role' or 'username' fields
         member.setCreatedAt(LocalDateTime.now());
         member.setUpdatedAt(LocalDateTime.now());
 
@@ -176,7 +170,7 @@ public class FamilyMemberService {
         result.put("member", member);
         result.put("user", subAccountUser);
         result.put("type", "SUB_ACCOUNT");
-        result.put("email", email); // Return email instead of username
+        result.put("email", email);
         result.put("message", "Sub-account created. Can login with email: " + email);
 
         logger.info("Created sub-account family member: {} (email: {})", name, email);
@@ -185,17 +179,79 @@ public class FamilyMemberService {
     }
 
     /**
-     * Update family member details
+     * ✅ FIXED: Update family member details - now handles PROFILE_ONLY → SUB_ACCOUNT conversion
      */
     @Transactional
     public FamilyMember updateFamilyMember(Long id, Map<String, Object> updates) {
         FamilyMember member = getFamilyMember(id);
+        User primaryAccount = member.getPrimaryAccount();
 
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ✅ FIX: Check if converting to SUB_ACCOUNT
+        // ═══════════════════════════════════════════════════════════════════════════
+        String accountType = (String) updates.get("accountType");
+        String role = (String) updates.get("role");
+        Boolean isSubAccount = (Boolean) updates.get("isSubAccount");
+
+        boolean wantsSubAccount = "sub_account".equals(accountType)
+                || "SUB_ACCOUNT".equals(accountType)
+                || "SUB_ACCOUNT".equals(role)
+                || Boolean.TRUE.equals(isSubAccount);
+
+        if (wantsSubAccount && member.getUser() == null) {
+            // ✅ Converting PROFILE_ONLY → SUB_ACCOUNT - CREATE USER!
+            String email = (String) updates.get("email");
+            String username = (String) updates.get("username");
+            String password = (String) updates.get("password");
+
+            // Use username as email if email not provided
+            if (email == null || email.trim().isEmpty()) {
+                email = username;
+            }
+
+            if (email == null || email.trim().isEmpty()) {
+                throw new BadRequestException("Email is required to create sub-account");
+            }
+
+            if (password == null || password.trim().isEmpty()) {
+                throw new BadRequestException("Password is required to create sub-account");
+            }
+
+            // Check if email already exists
+            if (userRepository.existsByEmail(email)) {
+                throw new BadRequestException("Email already exists");
+            }
+
+            // ✅ CREATE new User for this family member
+            User newUser = new User();
+            newUser.setFullName(member.getName());
+            newUser.setEmail(email);
+            newUser.setPasswordHash(passwordEncoder.encode(password));
+            newUser.setPhoneNumber((String) updates.get("phoneNumber"));
+            newUser.setRole(UserRole.SUB_ACCOUNT);
+            newUser.setPrimaryAccount(primaryAccount);
+            newUser.setIsActive(true);
+            newUser.setEmailVerified(true);
+            newUser.setCreatedAt(LocalDateTime.now());
+            newUser.setUpdatedAt(LocalDateTime.now());
+
+            newUser = userRepository.save(newUser);
+
+            // ✅ Link User to FamilyMember
+            member.setUser(newUser);
+
+            logger.info("✅ Created User {} for FamilyMember {} (conversion to SUB_ACCOUNT)",
+                    newUser.getId(), member.getId());
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Update basic FamilyMember fields
+        // ═══════════════════════════════════════════════════════════════════════════
         if (updates.containsKey("name")) {
             member.setName(updates.get("name").toString());
             if (member.getUser() != null) {
                 User user = member.getUser();
-                user.setFullName(updates.get("name").toString()); // User entity has 'fullName', not 'name'
+                user.setFullName(updates.get("name").toString());
                 userRepository.save(user);
             }
         }
@@ -204,24 +260,23 @@ public class FamilyMemberService {
             member.setRelationship(updates.get("relationship").toString());
         }
 
-        if (updates.containsKey("email")) {
-            // FamilyMember doesn't have email field
-            // Only update user's email if this is a sub-account
-            if (member.getUser() != null) {
-                User user = member.getUser();
-                user.setEmail(updates.get("email").toString());
+        if (updates.containsKey("email") && member.getUser() != null) {
+            User user = member.getUser();
+            String newEmail = updates.get("email").toString();
+            if (!newEmail.equals(user.getEmail())) {
+                // Check if new email is taken
+                if (userRepository.existsByEmail(newEmail)) {
+                    throw new BadRequestException("Email already exists");
+                }
+                user.setEmail(newEmail);
                 userRepository.save(user);
             }
         }
 
-        if (updates.containsKey("phoneNumber")) {
-            // FamilyMember doesn't have phoneNumber field
-            // Only update user's phoneNumber if this is a sub-account
-            if (member.getUser() != null) {
-                User user = member.getUser();
-                user.setPhoneNumber(updates.get("phoneNumber").toString());
-                userRepository.save(user);
-            }
+        if (updates.containsKey("phoneNumber") && member.getUser() != null) {
+            User user = member.getUser();
+            user.setPhoneNumber(updates.get("phoneNumber").toString());
+            userRepository.save(user);
         }
 
         if (updates.containsKey("dateOfBirth") && updates.get("dateOfBirth") != null) {
@@ -235,7 +290,7 @@ public class FamilyMemberService {
             String newPassword = updates.get("password").toString();
             if (newPassword != null && !newPassword.isEmpty()) {
                 User user = member.getUser();
-                user.setPasswordHash(passwordEncoder.encode(newPassword)); // User entity has 'passwordHash', not 'password'
+                user.setPasswordHash(passwordEncoder.encode(newPassword));
                 userRepository.save(user);
             }
         }
@@ -264,5 +319,22 @@ public class FamilyMemberService {
 
         familyMemberRepository.delete(member);
         logger.info("Deleted family member: {}", id);
+    }
+
+    /**
+     * Get family members for a specific user (used by controller)
+     * @deprecated Use getMyFamilyMembers() instead
+     */
+    public List<FamilyMember> getFamilyMembers(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
+
+        if (user.isPrimaryAccount()) {
+            return familyMemberRepository.findByPrimaryAccountId(userId);
+        } else {
+            return familyMemberRepository.findByUserId(userId)
+                    .map(List::of)
+                    .orElse(List.of());
+        }
     }
 }

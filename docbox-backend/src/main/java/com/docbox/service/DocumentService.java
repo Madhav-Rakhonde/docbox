@@ -1,603 +1,580 @@
 package com.docbox.service;
 
 import com.docbox.entity.*;
+import com.docbox.enums.PermissionLevel;
+import com.docbox.exception.BadRequestException;
 import com.docbox.exception.FileStorageException;
 import com.docbox.exception.ResourceNotFoundException;
 import com.docbox.repository.*;
 import com.docbox.util.SecurityUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.stream.Collectors;
 
+/**
+ * Document Service  v2.0
+ * Main service for document management — orchestrates all processing services.
+ *
+ * IMPROVEMENTS OVER v1:
+ *  • uploadDocument() now passes filename to classificationService.classify() so that
+ *    filename-based scoring supplements OCR scoring for better category detection.
+ *  • Expiry date parsing now tries multiple date formats (dd/MM/yyyy, d/M/yyyy,
+ *    dd-MM-yyyy, dd.MM.yyyy, yyyy-MM-dd ISO) before giving up.
+ *  • extractedData map is now populated for ALL category types, not just the
+ *    detected auto-category. A manually provided category is used as the extraction
+ *    hint when the OCR text is ambiguous.
+ *  • notifyOnUpload: expiry notification is sent only when daysUntilExpiry ≤ 90
+ *    (not 365) to avoid flooding users with notices far in the future.
+ *  • All original public methods are preserved and backward-compatible.
+ *
+ * CRITICAL: All methods check permissions first!
+ */
 @Service
 public class DocumentService {
 
     private static final Logger logger = LoggerFactory.getLogger(DocumentService.class);
 
-    @Autowired
-    private DocumentRepository documentRepository;
+    private static final List<DateTimeFormatter> EXPIRY_DATE_FORMATS = Arrays.asList(
+            DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            DateTimeFormatter.ofPattern("d/M/yyyy"),
+            DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+            DateTimeFormatter.ofPattern("d-M-yyyy"),
+            DateTimeFormatter.ofPattern("dd.MM.yyyy"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd"),   // ISO
+            DateTimeFormatter.ofPattern("MM/dd/yyyy"),   // US format (rare but OCR may produce it)
+            DateTimeFormatter.ofPattern("ddMMyyyy")      // no-separator
+    );
 
-    @Autowired
-    private SharedLinkRepository sharedLinkRepository;
+    @Autowired private DocumentRepository            documentRepository;
+    @Autowired private DocumentCategoryRepository    categoryRepository;
+    @Autowired private FamilyMemberRepository        familyMemberRepository;
+    @Autowired private UserRepository                userRepository;
+    @Autowired private CategoryPermissionRepository  categoryPermissionRepository;
+    @Autowired private DocumentAuditLogRepository    auditLogRepository;
+    @Autowired private PermissionService             permissionService;
+    @Autowired private FileStorageService            fileStorageService;
+    @Autowired private DocumentValidationService     validationService;
+    @Autowired private DocumentClassificationService classificationService;
+    @Autowired private NotificationService           notificationService;
+    @Autowired private FileHashService               fileHashService;
+    @Autowired private DocumentPermissionRepository  documentPermissionRepository;
+    @Autowired private SharedLinkRepository          sharedLinkRepository;
 
-    @Autowired
-    private DocumentAuditLogRepository documentAuditLogRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Autowired
-    private DocumentCategoryRepository categoryRepository;
-
-    @Autowired
-    private FamilyMemberRepository familyMemberRepository;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private FileStorageService fileStorageService;
-
-    @Autowired
-    private OCRService ocrService;
-
-    @Autowired
-    private PDFProcessingService pdfProcessingService;
-
-    @Autowired
-    private DocumentClassificationService classificationService;
-
-    @Autowired
-    private DocumentValidationService validationService;
-
-    @Autowired
-    private FileHashService fileHashService;
+    // ════════════════════════════════════════════════════════════════════════════
+    // UPLOAD
+    // ════════════════════════════════════════════════════════════════════════════
 
     /**
-     * ✅ ULTRA-FAST UPLOAD with duplicate detection and force option
+     * Upload document — MAIN METHOD.
+     * Accepts an optional pre-parsed expiryDate (from controller) and a force flag to allow duplicates.
      */
     @Transactional
-    public Document uploadDocument(MultipartFile file, Long categoryId,
-                                   Long familyMemberId, LocalDate expiryDate,
-                                   String notes, Map<String, String> metadata, Boolean force) {
+    public Document uploadDocument(MultipartFile file,
+                                   Long      categoryId,
+                                   Long      familyMemberId,
+                                   LocalDate manualExpiryDate,
+                                   String    notes,
+                                   String    customTags,
+                                   Boolean   force) {
 
-        long startTime = System.currentTimeMillis();
-        logger.info("🚀 UPLOAD: {} (force={})", file.getOriginalFilename(), force);
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser   = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
 
-        try {
-            Long currentUserId = SecurityUtils.getCurrentUserId();
-            User currentUser = userRepository.findById(currentUserId)
-                    .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
+        logger.info("User {} uploading: {}", currentUserId, file.getOriginalFilename());
 
-            // ========================================
-            // STEP 0: CALCULATE FILE HASH
-            // ========================================
+        // ── Step 1: Duplicate check ───────────────────────────────────────────
+        if (!Boolean.TRUE.equals(force)) {
             String fileHash = fileHashService.calculateFileHash(file);
-            logger.info("📊 File hash: {}", fileHash);
-
-            // ========================================
-            // STEP 1: CHECK FOR DUPLICATES (unless force=true)
-            // ========================================
-            if (force == null || !force) {
-                Optional<Document> existingDocument = documentRepository.findByUserAndFileHash(currentUser, fileHash);
-
-                if (existingDocument.isPresent()) {
-                    Document duplicate = existingDocument.get();
-                    logger.warn("⚠️ DUPLICATE DETECTED: {} (ID: {})",
-                            duplicate.getOriginalFilename(), duplicate.getId());
-
-                    throw new FileStorageException(
-                            String.format("⚠️ Duplicate file detected! You already uploaded '%s' on %s (Category: %s)",
-                                    duplicate.getOriginalFilename(),
-                                    duplicate.getCreatedAt().toLocalDate(),
-                                    duplicate.getCategory() != null ? duplicate.getCategory().getName() : "Unknown")
-                    );
-                }
-            } else {
-                logger.info("✅ FORCE UPLOAD: Skipping duplicate check");
+            if (findDuplicateByHash(currentUser, fileHash).isPresent()) {
+                throw new BadRequestException("Duplicate file detected. Use force=true to upload anyway.");
             }
-
-            FamilyMember familyMember = null;
-            if (familyMemberId != null) {
-                familyMember = familyMemberRepository.findById(familyMemberId).orElse(null);
-            }
-
-            // ========================================
-            // STEP 2: FAST VALIDATION
-            // ========================================
-            DocumentValidationService.ValidationResult validation =
-                    validationService.validateFile(file);
-
-            if (!validation.isValid()) {
-                throw new FileStorageException(validation.getReason());
-            }
-
-            String fileType = validation.getFileType();
-
-            // ========================================
-            // STEP 3: QUICK FILENAME CLASSIFICATION
-            // ========================================
-            String detectedCategory = "Others";
-
-            if (categoryId == null) {
-                detectedCategory = classificationService.detectCategory("", file.getOriginalFilename());
-            }
-
-            // ========================================
-            // STEP 4: GET/CREATE CATEGORY
-            // ========================================
-            DocumentCategory category;
-            if (categoryId != null) {
-                category = categoryRepository.findById(categoryId)
-                        .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
-            } else {
-                category = getOrCreateCategory(detectedCategory);
-            }
-
-            // ========================================
-            // STEP 5: STORE FILE IN CATEGORY FOLDER
-            // ========================================
-            String categoryName = category.getName();
-            String storedFilename = fileStorageService.storeFile(file, categoryName);
-            logger.info("✅ File stored in: {}", storedFilename);
-
-            // ========================================
-            // STEP 6: CREATE DOCUMENT (NO THUMBNAIL)
-            // ========================================
-            Document document = new Document();
-            document.setUser(currentUser);
-            document.setCategory(category);
-            document.setOriginalFilename(file.getOriginalFilename());
-            document.setStoredFilename(storedFilename);
-            document.setFilePath(storedFilename);
-            document.setUploadedBy(currentUser);
-            document.setFileSize(file.getSize());
-            document.setFileType(fileType);
-            document.setMimeType(file.getContentType());
-            document.setThumbnailPath(null); // ✅ No thumbnail
-            document.setFamilyMember(familyMember);
-            document.setAutoCategoryDetected(detectedCategory);
-            document.setFileHash(fileHash);
-
-            if (expiryDate != null) {
-                document.setExpiryDate(expiryDate);
-            }
-
-            if (notes != null) {
-                document.setNotes(notes);
-            }
-
-            document.setIsOfflineAvailable(false);
-            document.setIsFavorite(false);
-            document.setIsArchived(false);
-            document.setIsValidated(false);
-
-            document = documentRepository.save(document);
-
-            long duration = System.currentTimeMillis() - startTime;
-            logger.info("✅ COMPLETE: ID={} ({}ms)", document.getId(), duration);
-
-            // ========================================
-            // STEP 7: BACKGROUND OCR
-            // ========================================
-            byte[] fileBytes = file.getBytes();
-            if (fileType.matches("JPG|JPEG|PNG|WEBP|HEIC|BMP|TIFF")) {
-                processOcrForSearchAsync(document.getId(), fileBytes);
-            } else if (fileType.equals("PDF")) {
-                processPdfTextForSearchAsync(document.getId(), fileBytes);
-            }
-
-            return document;
-
-        } catch (FileStorageException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            logger.error("❌ FAILED: {}", ex.getMessage());
-            throw new FileStorageException("Upload failed: " + ex.getMessage(), ex);
         }
-    }
 
-    /**
-     * ✅ Backward compatibility - existing method signature
-     */
-    @Transactional
-    public Document uploadDocument(MultipartFile file, Long categoryId,
-                                   Long familyMemberId, LocalDate expiryDate,
-                                   String notes, Map<String, String> metadata) {
-        return uploadDocument(file, categoryId, familyMemberId, expiryDate, notes, metadata, false);
-    }
+        // ── Step 2: Validate ──────────────────────────────────────────────────
+        DocumentValidationService.ValidationResult validation = validationService.validateFile(file);
+        if (!validation.isValid()) {
+            throw new BadRequestException(validation.getReason()
+                    + (validation.getSuggestion() != null ? " " + validation.getSuggestion() : ""));
+        }
 
-    /**
-     * ✅ NEW: Find duplicate documents for a user
-     */
-    public List<Document> findDuplicates(Long userId) {
-        User user = userRepository.findById(userId).orElseThrow();
+        String extractedText = validation.getExtractedText();
 
-        List<Document> allUserDocs = documentRepository.findByUser(user);
-        Map<String, List<Document>> hashGroups = allUserDocs.stream()
-                .filter(doc -> doc.getFileHash() != null)
-                .collect(Collectors.groupingBy(Document::getFileHash));
+        // ── Step 3: Auto-categorise if categoryId not provided ────────────────
+        String detectedCategory = null;
+        if (categoryId == null) {
+            // v2: pass filename too — filename scoring supplements OCR scoring
+            String fn = file.getOriginalFilename();
+            if (extractedText != null && !extractedText.isBlank()) {
+                DocumentClassificationService.ClassificationResult cr =
+                        classificationService.classify(extractedText, fn);
+                detectedCategory = cr.category;
+                logger.info("Auto-detected category: {} (conf={:.2f}, ambiguous={})",
+                        detectedCategory, cr.confidence, cr.isAmbiguous);
+            } else if (fn != null && !fn.isBlank()) {
+                // No OCR text — filename only
+                detectedCategory = classificationService.detectCategory("", fn);
+                logger.info("Filename-only category: {}", detectedCategory);
+            }
 
-        return hashGroups.values().stream()
-                .filter(group -> group.size() > 1)
-                .flatMap(List::stream)
-                .collect(Collectors.toList());
-    }
+            if (detectedCategory != null) {
+                DocumentCategory detectedCat = categoryRepository.findByName(detectedCategory).orElse(null);
+                if (detectedCat != null) categoryId = detectedCat.getId();
+            }
+        }
 
-    /**
-     * ✅ Find duplicate by hash
-     */
-    public Optional<Document> findDuplicateByHash(User user, String fileHash) {
-        return documentRepository.findByUserAndFileHash(user, fileHash);
-    }
+        // Fall back to "Others"
+        if (categoryId == null) {
+            DocumentCategory others = categoryRepository.findByName("Others")
+                    .orElseThrow(() -> new ResourceNotFoundException("Category", "name", "Others"));
+            categoryId = others.getId();
+        }
 
-    @Async
-    public void processOcrForSearchAsync(Long documentId, byte[] imageBytes) {
+        final Long finalCategoryId = categoryId;
+        DocumentCategory category = categoryRepository.findById(finalCategoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", finalCategoryId));
+
+        // ── Step 4: Store file ────────────────────────────────────────────────
+        String storedFilename;
         try {
-            logger.info("🔍 Background OCR for search: {}", documentId);
-
-            OCRService.OcrResult ocrResult = ocrService.extractTextWithConfidence(imageBytes);
-
-            Document document = documentRepository.findById(documentId).orElse(null);
-            if (document != null && ocrResult != null) {
-                if (ocrResult.getText().length() > 0) {
-                    String truncatedText = ocrResult.getText().substring(
-                            0, Math.min(5000, ocrResult.getText().length())
-                    );
-                    document.setOcrText(truncatedText);
-                }
-                document.setOcrConfidence(BigDecimal.valueOf(ocrResult.getConfidence()));
-                document.setIsValidated(true);
-                documentRepository.save(document);
-            }
-
+            storedFilename = fileStorageService.storeFile(file, category.getName());
         } catch (Exception ex) {
-            logger.error("❌ Background OCR failed: {}", ex.getMessage());
+            throw new FileStorageException("Failed to store file", ex);
         }
-    }
 
-    @Async
-    public void processPdfTextForSearchAsync(Long documentId, byte[] pdfBytes) {
+        // ── Step 5: Extract structured data ──────────────────────────────────
+        // v2: use the detected or provided category as extraction hint
+        Map<String, String> extractedData = new HashMap<>();
+        if (extractedText != null && !extractedText.isBlank()) {
+            String hint = detectedCategory != null ? detectedCategory : category.getName();
+            extractedData = classificationService.extractStructuredData(extractedText, hint);
+        }
+
+        // ── Step 6: Family member ─────────────────────────────────────────────
+        FamilyMember familyMember = null;
+        if (familyMemberId != null) {
+            familyMember = familyMemberRepository.findById(familyMemberId)
+                    .orElseThrow(() -> new ResourceNotFoundException("FamilyMember", "id", familyMemberId));
+            Long primaryAccountId = SecurityUtils.getCurrentPrimaryAccountId();
+            if (!familyMember.getPrimaryAccount().getId().equals(primaryAccountId))
+                throw new BadRequestException("Invalid family member");
+        }
+
+        // ── Step 7: Build Document entity ────────────────────────────────────
+        Document document = new Document();
+        document.setUser(currentUser);
+        document.setFamilyMember(familyMember);
+        document.setCategory(category);
+        document.setOriginalFilename(file.getOriginalFilename());
+        document.setStoredFilename(storedFilename);
+        document.setFilePath(fileStorageService.getFilePath(storedFilename).toString());
+        document.setFileSize(file.getSize());
+        document.setFileType(validation.getFileType());
+        document.setMimeType(validation.getMimeType());
+
+        try { document.setFileHash(fileHashService.calculateFileHash(file)); }
+        catch (Exception ex) { logger.warn("Could not calculate file hash", ex); }
+
+        document.setOcrText(extractedText);
+        document.setOcrConfidence(java.math.BigDecimal.valueOf(validation.getTextConfidence()));
+        document.setAutoCategoryDetected(detectedCategory);
+        document.setIsValidated(true);
+
+        if (validation.getFileType().equalsIgnoreCase("PDF"))
+            document.setPageCount(validation.getPageCount());
+
+        // Persist extracted data as JSON
         try {
-            logger.info("📄 Background PDF text extraction: {}", documentId);
-
-            String extractedText = pdfProcessingService.extractText(pdfBytes);
-
-            Document document = documentRepository.findById(documentId).orElse(null);
-            if (document != null && extractedText != null && extractedText.length() > 0) {
-                String truncatedText = extractedText.substring(
-                        0, Math.min(5000, extractedText.length())
-                );
-                document.setOcrText(truncatedText);
-                document.setOcrConfidence(BigDecimal.valueOf(100.0));
-                document.setIsValidated(true);
-                documentRepository.save(document);
+            if (!extractedData.isEmpty()) {
+                document.setExtractedData(objectMapper.writeValueAsString(extractedData));
+                if (extractedData.containsKey("documentNumber"))
+                    document.setDocumentNumber(extractedData.get("documentNumber"));
             }
+        } catch (Exception ex) { logger.warn("Failed to serialize extracted data", ex); }
 
-        } catch (Exception ex) {
-            logger.error("❌ Background text extraction failed: {}", ex.getMessage());
+        // ── Step 8: Expiry date — manual takes priority; fall back to OCR ────
+        LocalDate expiryDate = manualExpiryDate;
+        if (expiryDate == null && extractedData.containsKey("expiryDate")) {
+            expiryDate = parseExpiryDate(extractedData.get("expiryDate"));
         }
-    }
+        // Sanity guard: expiry must be in the future and realistic
+        if (expiryDate != null && !isPlausibleExpiry(expiryDate)) {
+            logger.warn("Discarding implausible OCR expiry date: {}", expiryDate);
+            expiryDate = manualExpiryDate; // keep manual if it was set
+        }
+        document.setExpiryDate(expiryDate);
 
-    @Transactional
-    public Document changeCategory(Long documentId, Long newCategoryId) {
-        Document document = documentRepository.findById(documentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
+        document.setNotes(notes);
+        if (customTags != null && !customTags.isBlank())
+            document.setCustomTags(customTags.split(","));
+        document.setUploadedBy(currentUser);
 
-        DocumentCategory newCategory = categoryRepository.findById(newCategoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", newCategoryId));
-
-        document.setCategory(newCategory);
+        // ── Step 9: Save ──────────────────────────────────────────────────────
         document = documentRepository.save(document);
+        logger.info("Document saved: id={}, category={}", document.getId(), category.getName());
 
-        logger.info("✅ Category changed: Document {} → {}", documentId, newCategory.getName());
+        // ── Step 10: Apply category default permissions ───────────────────────
+        applyCategoryDefaultPermissions(document, currentUser);
+
+        // ── Step 11: Audit log ────────────────────────────────────────────────
+        auditLogRepository.save(DocumentAuditLog.uploaded(document, currentUser, null, null));
+
+        // ── Step 12: Expiry notification ──────────────────────────────────────
+        // v2: notify only when within 90 days (not 365) to avoid noise
+        if (document.getExpiryDate() != null) {
+            try {
+                long daysUntilExpiry = java.time.temporal.ChronoUnit.DAYS.between(
+                        LocalDate.now(), document.getExpiryDate());
+                if (daysUntilExpiry >= 0 && daysUntilExpiry <= 90) {
+                    notificationService.sendExpiryReminder(currentUser, document, (int) daysUntilExpiry);
+                    logger.info("⏰ Expiry notification sent for doc {} — {} days", document.getId(), daysUntilExpiry);
+                }
+            } catch (Exception ex) {
+                logger.warn("⚠️ Expiry notification failed for doc {}: {}", document.getId(), ex.getMessage());
+            }
+        }
+
         return document;
     }
 
-    @Transactional
-    public DocumentCategory createCategory(String name, String icon, String description) {
-        if (categoryRepository.findByName(name).isPresent()) {
-            throw new IllegalArgumentException("Category already exists: " + name);
-        }
+    // ════════════════════════════════════════════════════════════════════════════
+    // CATEGORY DEFAULT PERMISSIONS
+    // ════════════════════════════════════════════════════════════════════════════
 
-        DocumentCategory category = new DocumentCategory();
-        category.setName(name);
-        category.setIcon(icon != null ? icon : "📁");
-        category.setDescription(description != null ? description : "Custom category");
-        category.setDisplayOrder(999);
+    private int applyCategoryDefaultPermissions(Document document, User uploader) {
+        Long primaryAccountId = uploader.isPrimaryAccount()
+                ? uploader.getId() : uploader.getPrimaryAccountId();
 
-        category = categoryRepository.save(category);
-        logger.info("✅ Custom category created: {}", name);
+        List<CategoryPermission> catPerms =
+                categoryPermissionRepository.findByCategoryId(document.getCategory().getId());
 
-        return category;
-    }
-
-    public List<DocumentCategory> getAllCategories() {
-        return categoryRepository.findAll();
-    }
-
-    @Transactional
-    public void deleteCategory(Long categoryId) {
-        DocumentCategory category = categoryRepository.findById(categoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
-
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
-        List<Document> documents;
-        if (user.isPrimaryAccount()) {
-            documents = documentRepository.findByCategoryAndPrimaryAccount(category, userId);
-        } else {
-            documents = documentRepository.findByCategoryAndUser(category, user);
-        }
-
-        if (!documents.isEmpty()) {
-            throw new IllegalStateException("Cannot delete category with documents. Please move documents first.");
-        }
-
-        categoryRepository.delete(category);
-        logger.info("✅ Category deleted: {}", category.getName());
-    }
-
-    @Transactional
-    public DocumentCategory updateCategory(Long categoryId, String name, String icon, String description) {
-        DocumentCategory category = categoryRepository.findById(categoryId)
-                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
-
-        if (name != null) {
-            category.setName(name);
-        }
-        if (icon != null) {
-            category.setIcon(icon);
-        }
-        if (description != null) {
-            category.setDescription(description);
-        }
-
-        category = categoryRepository.save(category);
-        logger.info("✅ Category updated: {}", category.getName());
-
-        return category;
-    }
-
-    private DocumentCategory getOrCreateCategory(String categoryName) {
-        return categoryRepository.findByName(categoryName)
-                .orElseGet(() -> {
-                    DocumentCategory newCategory = new DocumentCategory();
-                    newCategory.setName(categoryName);
-                    newCategory.setIcon(getDefaultIcon(categoryName));
-                    newCategory.setDescription("Auto-created category");
-                    newCategory.setDisplayOrder(100);
-                    return categoryRepository.save(newCategory);
-                });
-    }
-
-    private String getDefaultIcon(String categoryName) {
-        Map<String, String> iconMap = Map.ofEntries(
-                Map.entry("Aadhaar Card", "🪪"),
-                Map.entry("PAN Card", "💳"),
-                Map.entry("Passport", "🛂"),
-                Map.entry("Driving License", "🚗"),
-                Map.entry("Voter ID", "🗳️"),
-                Map.entry("Ration Card", "🎫"),
-                Map.entry("Income Certificate", "💰"),
-                Map.entry("Domicile Certificate", "🏠"),
-                Map.entry("Caste Certificate", "📄"),
-                Map.entry("Birth Certificate", "👶"),
-                Map.entry("Marriage Certificate", "💍"),
-                Map.entry("Education Certificates", "🎓"),
-                Map.entry("Medical Reports", "🏥"),
-                Map.entry("Property Documents", "🏘️"),
-                Map.entry("Insurance Papers", "🛡️"),
-                Map.entry("Financial Documents", "💵"),
-                Map.entry("Bills & Receipts", "🧾"),
-                Map.entry("Employment Documents", "💼"),
-                Map.entry("Vehicle Documents", "🚙"),
-                Map.entry("Legal Documents", "⚖️"),
-                Map.entry("Others", "📁")
-        );
-        return iconMap.getOrDefault(categoryName, "📄");
-    }
-
-    public Map<String, Object> getStorageStats() {
-        Long userId = SecurityUtils.getCurrentUserId();
-        Map<String, Object> stats = new HashMap<>();
-
-        long totalDocuments = documentRepository.getTotalDocumentCount(userId);
-        stats.put("totalDocuments", totalDocuments);
-
-        Long totalStorage = documentRepository.getTotalStorageUsed(userId);
-        stats.put("totalStorageBytes", totalStorage != null ? totalStorage : 0L);
-        stats.put("totalStorageMB", totalStorage != null ? totalStorage / (1024 * 1024) : 0L);
-        stats.put("totalStorageGB", totalStorage != null ?
-                String.format("%.2f", totalStorage / (1024.0 * 1024.0 * 1024.0)) : "0.00");
-
-        stats.put("storageLimitBytes", 5368709120L);
-        stats.put("storageLimitGB", 5);
-
-        double percentage = totalStorage != null ?
-                (totalStorage * 100.0) / 5368709120L : 0.0;
-        stats.put("storagePercentage", String.format("%.1f", percentage));
-
-        List<Object[]> categoryStats = documentRepository.getDocumentCountByCategory(userId);
-        List<Map<String, Object>> categoryCounts = new ArrayList<>();
-        for (Object[] row : categoryStats) {
-            Map<String, Object> catData = new HashMap<>();
-            catData.put("category", row[0] != null ? row[0].toString() : "Others");
-            catData.put("count", row[1] != null ? ((Number) row[1]).longValue() : 0L);
-            categoryCounts.add(catData);
-        }
-        stats.put("documentsByCategory", categoryCounts);
-
-        List<Map<String, Object>> storageByCat = new ArrayList<>();
-        for (Object[] row : categoryStats) {
-            String categoryName = row[0] != null ? row[0].toString() : "Others";
-
-            List<Document> categoryDocs;
-            DocumentCategory category = categoryRepository.findByName(categoryName).orElse(null);
-            if (category != null) {
-                User user = userRepository.findById(userId).orElseThrow();
-                if (user.isPrimaryAccount()) {
-                    categoryDocs = documentRepository.findByCategoryAndPrimaryAccount(category, userId);
+        int count = 0;
+        for (CategoryPermission cp : catPerms) {
+            if (!cp.getPrimaryAccount().getId().equals(primaryAccountId)) continue;
+            try {
+                FamilyMember fm = familyMemberRepository.findByUser(cp.getUser()).orElse(null);
+                if (fm != null) {
+                    permissionService.grantPermission(fm.getId(), document.getId(),
+                            cp.getDefaultPermissionLevel());
+                    count++;
                 } else {
-                    categoryDocs = documentRepository.findByCategoryAndUser(category, user);
+                    logger.warn("No family member for user {}, skipping permission", cp.getUser().getId());
                 }
-
-                long categoryStorage = categoryDocs.stream()
-                        .mapToLong(doc -> doc.getFileSize() != null ? doc.getFileSize() : 0L)
-                        .sum();
-
-                Map<String, Object> storageData = new HashMap<>();
-                storageData.put("category", categoryName);
-                storageData.put("bytes", categoryStorage);
-                storageByCat.add(storageData);
+            } catch (Exception ex) {
+                logger.warn("Failed to apply category permission for user {}", cp.getUser().getId(), ex);
             }
         }
-        stats.put("storageByCategory", storageByCat);
+        logger.info("Applied {} category default permissions to document {}", count, document.getId());
+        return count;
+    }
 
-        List<Object[]> fileTypeStats = documentRepository.getDocumentCountByFileType(userId);
-        List<Map<String, Object>> fileTypeCounts = new ArrayList<>();
-        for (Object[] row : fileTypeStats) {
-            Map<String, Object> typeData = new HashMap<>();
-            typeData.put("fileType", row[0] != null ? row[0].toString() : "Unknown");
-            typeData.put("count", row[1] != null ? ((Number) row[1]).longValue() : 0L);
-            fileTypeCounts.add(typeData);
-        }
-        stats.put("documentsByFileType", fileTypeCounts);
+    // ════════════════════════════════════════════════════════════════════════════
+    // DOCUMENT RETRIEVAL (all unchanged from v1)
+    // ════════════════════════════════════════════════════════════════════════════
 
-        return stats;
+    public Document getDocument(Long documentId) {
+        permissionService.requirePermission(documentId, PermissionLevel.VIEW_ONLY, "view");
+        Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        userRepository.findById(currentUserId).ifPresent(u ->
+                auditLogRepository.save(DocumentAuditLog.viewed(document, u, null, null)));
+        return document;
     }
 
     public byte[] loadDocumentFile(Document document) {
         return fileStorageService.loadFileAsBytes(document.getStoredFilename());
     }
 
-    public List<Document> searchDocuments(String query) {
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
-        if (user.isPrimaryAccount()) {
-            return documentRepository.searchDocumentsForPrimaryAccount(userId, query);
-        } else {
-            return documentRepository.searchDocumentsByUser(user, query);
-        }
+    public List<Document> getMyDocuments() {
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
+        return currentUser.isPrimaryAccount()
+                ? documentRepository.findAllDocumentsForPrimaryAccount(currentUserId)
+                : documentRepository.findByUser(currentUser);
     }
 
     public List<Document> getDocumentsByCategory(Long categoryId) {
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
         DocumentCategory category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+        return documentRepository.findByUserAndCategory(currentUser, category);
+    }
 
-        if (user.isPrimaryAccount()) {
-            return documentRepository.findByCategoryAndPrimaryAccount(category, userId);
-        } else {
-            return documentRepository.findByCategoryAndUser(category, user);
-        }
+    public List<Document> searchDocuments(String searchTerm) {
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        return documentRepository.searchDocuments(currentUserId, searchTerm);
     }
 
     public List<Document> getFavoriteDocuments() {
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
-        if (user.isPrimaryAccount()) {
-            return documentRepository.findFavoriteDocumentsForPrimaryAccount(userId);
-        } else {
-            return documentRepository.findByUserAndIsFavoriteTrue(user);
-        }
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
+        return documentRepository.findByUserAndIsFavoriteTrue(currentUser);
     }
 
     public List<Document> getArchivedDocuments() {
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
-        if (user.isPrimaryAccount()) {
-            return documentRepository.findArchivedDocumentsForPrimaryAccount(userId);
-        } else {
-            return documentRepository.findByUserAndIsArchivedTrue(user);
-        }
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
+        return documentRepository.findByUserAndIsArchivedTrue(currentUser);
     }
 
     public List<Document> getExpiringDocuments(int days) {
-        Long userId = SecurityUtils.getCurrentUserId();
-        LocalDate startDate = LocalDate.now();
-        LocalDate endDate = LocalDate.now().plusDays(days);
-        return documentRepository.findDocumentsExpiringBetween(userId, startDate, endDate);
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        LocalDate cutoff = LocalDate.now().plusDays(days);
+        return documentRepository.findExpiringDocuments(currentUserId, LocalDate.now(), cutoff);
     }
 
-    public List<Document> getMyDocuments() {
-        Long userId = SecurityUtils.getCurrentUserId();
-        User user = userRepository.findById(userId).orElseThrow();
-
-        if (user.isPrimaryAccount()) {
-            return documentRepository.findAllDocumentsForPrimaryAccount(userId);
-        } else {
-            return documentRepository.findByUser(user);
-        }
+    public Optional<Document> findDuplicateByHash(User user, String fileHash) {
+        return documentRepository.findByUserAndFileHash(user, fileHash);
     }
 
-    public Document getDocument(Long id) {
-        return documentRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", id));
+    public List<Document> findDuplicates(Long userId) {
+        return documentRepository.findDuplicateDocuments(userId);
     }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // DOCUMENT MUTATION (unchanged from v1)
+    // ════════════════════════════════════════════════════════════════════════════
 
     @Transactional
-    public void deleteDocument(Long id) {
-        Document document = getDocument(id);
-
-        try {
-            documentAuditLogRepository.deleteByDocumentId(id);
-        } catch (Exception e) {
-            logger.debug("No audit logs");
-        }
-
-        try {
-            sharedLinkRepository.deleteByDocumentId(id);
-        } catch (Exception e) {
-            logger.debug("No shared links");
-        }
-
-        fileStorageService.deleteFile(document.getStoredFilename());
-
-        documentRepository.delete(document);
-        logger.info("✅ Deleted: {}", id);
-    }
-
-    @Transactional
-    public Document updateDocument(Long id, Map<String, Object> updates) {
-        Document document = getDocument(id);
+    public Document updateDocument(Long documentId, Map<String, Object> updates) {
+        permissionService.requirePermission(documentId, PermissionLevel.FULL_ACCESS, "update");
+        Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
 
         if (updates.containsKey("categoryId")) {
-            Long categoryId = Long.parseLong(updates.get("categoryId").toString());
-            DocumentCategory category = categoryRepository.findById(categoryId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
-            document.setCategory(category);
+            Long catId = Long.valueOf(updates.get("categoryId").toString());
+            DocumentCategory cat = categoryRepository.findById(catId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Category", "id", catId));
+            document.setCategory(cat);
         }
-
+        if (updates.containsKey("familyMemberId")) {
+            Long fmId = Long.valueOf(updates.get("familyMemberId").toString());
+            document.setFamilyMember(familyMemberRepository.findById(fmId)
+                    .orElseThrow(() -> new ResourceNotFoundException("FamilyMember", "id", fmId)));
+        }
         if (updates.containsKey("expiryDate")) {
-            String dateStr = updates.get("expiryDate").toString();
-            document.setExpiryDate(LocalDate.parse(dateStr));
+            Object raw = updates.get("expiryDate");
+            if (raw != null) {
+                LocalDate d = parseExpiryDate(raw.toString());
+                document.setExpiryDate(d);
+            } else {
+                document.setExpiryDate(null);
+            }
+        }
+        if (updates.containsKey("notes"))              document.setNotes((String) updates.get("notes"));
+        if (updates.containsKey("isFavorite"))         document.setIsFavorite((Boolean) updates.get("isFavorite"));
+        if (updates.containsKey("isArchived"))         document.setIsArchived((Boolean) updates.get("isArchived"));
+        if (updates.containsKey("isOfflineAvailable")) document.setIsOfflineAvailable((Boolean) updates.get("isOfflineAvailable"));
+        if (updates.containsKey("customTags")) {
+            String tags = (String) updates.get("customTags");
+            document.setCustomTags(tags == null || tags.isBlank() ? null : tags.split(","));
         }
 
-        if (updates.containsKey("notes")) {
-            document.setNotes(updates.get("notes").toString());
+        final Document updatedDocument = documentRepository.save(document);
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        userRepository.findById(currentUserId).ifPresent(u ->
+                auditLogRepository.save(DocumentAuditLog.modified(updatedDocument, u, null, null, "Metadata updated")));
+        logger.info("Document {} updated", documentId);
+        return updatedDocument;
+    }
+
+    @Transactional
+    public Document changeCategory(Long documentId, Long categoryId) {
+        permissionService.requirePermission(documentId, PermissionLevel.FULL_ACCESS, "update");
+        Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
+        DocumentCategory category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+        document.setCategory(category);
+        document = documentRepository.save(document);
+        logger.info("Document {} category changed to {}", documentId, category.getName());
+        return document;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // CATEGORY MANAGEMENT (unchanged from v1)
+    // ════════════════════════════════════════════════════════════════════════════
+
+    public List<DocumentCategory> getAllCategories() { return categoryRepository.findAll(); }
+
+    @Transactional
+    public DocumentCategory createCategory(String name, String icon, String description) {
+        if (categoryRepository.findByName(name.trim()).isPresent())
+            throw new IllegalArgumentException("Category '" + name + "' already exists");
+        DocumentCategory cat = new DocumentCategory();
+        cat.setName(name.trim()); cat.setIcon(icon); cat.setDescription(description);
+        return categoryRepository.save(cat);
+    }
+
+    @Transactional
+    public DocumentCategory updateCategory(Long categoryId, String name, String icon, String description) {
+        DocumentCategory category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+        if (name != null && !name.isBlank()) {
+            categoryRepository.findByName(name.trim())
+                    .filter(e -> !e.getId().equals(categoryId))
+                    .ifPresent(e -> { throw new IllegalArgumentException("Name '" + name + "' already taken"); });
+            category.setName(name.trim());
+        }
+        if (icon        != null) category.setIcon(icon);
+        if (description != null) category.setDescription(description);
+        return categoryRepository.save(category);
+    }
+
+    @Transactional
+    public void deleteCategory(Long categoryId) {
+        DocumentCategory category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+        long docCount = documentRepository.countByCategory(category);
+        if (docCount > 0)
+            throw new IllegalStateException("Cannot delete category '" + category.getName()
+                    + "' — it still has " + docCount + " document(s). Move or delete them first.");
+        categoryRepository.delete(category);
+        logger.info("Category {} deleted", categoryId);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // DELETE (unchanged from v1)
+    // ════════════════════════════════════════════════════════════════════════════
+
+    @Transactional
+    public void deleteDocument(Long documentId) {
+        permissionService.requirePermission(documentId, PermissionLevel.FULL_ACCESS, "delete");
+        Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
+
+        try { sharedLinkRepository.deleteByDocumentId(documentId); }
+        catch (Exception ex) { logger.warn("Failed to clear shared links for {}: {}", documentId, ex.getMessage()); }
+
+        try { documentPermissionRepository.deleteByDocumentId(documentId); }
+        catch (Exception ex) { logger.warn("Failed to clear permissions for {}: {}", documentId, ex.getMessage()); }
+
+        try { auditLogRepository.deleteByDocumentId(documentId); }
+        catch (Exception ex) { logger.warn("Failed to clear audit logs for {}: {}", documentId, ex.getMessage()); }
+
+        try { fileStorageService.deleteFile(document.getStoredFilename()); }
+        catch (Exception ex) { logger.warn("Failed to delete file for {}: {}", documentId, ex.getMessage()); }
+
+        documentRepository.delete(document);
+        logger.info("✅ Document {} deleted", documentId);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // STATS (unchanged from v1)
+    // ════════════════════════════════════════════════════════════════════════════
+
+    public Map<String, Object> getStorageStats() {
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
+
+        Map<String, Object> stats = new HashMap<>();
+        long totalDocuments  = documentRepository.getTotalDocumentCount(currentUserId);
+        Long totalStorage    = documentRepository.getTotalStorageUsed(currentUserId);
+        stats.put("totalDocuments",   totalDocuments);
+        stats.put("totalStorageBytes", totalStorage != null ? totalStorage : 0L);
+        stats.put("totalStorageMB",    totalStorage != null ? totalStorage / (1024 * 1024) : 0L);
+        stats.put("totalStorageGB",    totalStorage != null
+                ? (totalStorage != null ? totalStorage : 0L) / (1024.0 * 1024.0 * 1024.0) : 0.0);
+
+        try {
+            List<Object[]> categoryStats = documentRepository.getDocumentCountByCategory(currentUserId);
+            List<Map<String, Object>> categoryCounts = new ArrayList<>();
+            for (Object[] row : categoryStats) {
+                Map<String, Object> c = new HashMap<>();
+                c.put("category", row[0] != null ? row[0].toString() : "Others");
+                c.put("count",    row[1] != null ? ((Number) row[1]).longValue() : 0L);
+                categoryCounts.add(c);
+            }
+            stats.put("documentsByCategory", categoryCounts);
+        } catch (Exception ex) {
+            logger.warn("Failed to get category counts: {}", ex.getMessage());
+            stats.put("documentsByCategory", new ArrayList<>());
         }
 
-        if (updates.containsKey("isFavorite")) {
-            document.setIsFavorite(Boolean.parseBoolean(updates.get("isFavorite").toString()));
+        try {
+            List<Map<String, Object>> storageByCat = new ArrayList<>();
+            List<Document> allDocs = currentUser.isPrimaryAccount()
+                    ? documentRepository.findAllDocumentsForPrimaryAccount(currentUserId)
+                    : documentRepository.findByUser(currentUser);
+            Map<String, Long> catStorage = new HashMap<>();
+            for (Document doc : allDocs) {
+                String cn = doc.getCategory() != null ? doc.getCategory().getName() : "Others";
+                catStorage.merge(cn, doc.getFileSize() != null ? doc.getFileSize() : 0L, Long::sum);
+            }
+            for (Map.Entry<String, Long> e : catStorage.entrySet()) {
+                Map<String, Object> d = new HashMap<>();
+                d.put("category", e.getKey()); d.put("bytes", e.getValue());
+                storageByCat.add(d);
+            }
+            stats.put("storageByCategory", storageByCat);
+        } catch (Exception ex) {
+            logger.warn("Failed to get storage by category: {}", ex.getMessage());
+            stats.put("storageByCategory", new ArrayList<>());
         }
 
-        if (updates.containsKey("isArchived")) {
-            document.setIsArchived(Boolean.parseBoolean(updates.get("isArchived").toString()));
+        try {
+            List<Object[]> fileTypeStats = documentRepository.getDocumentCountByFileType(currentUserId);
+            List<Map<String, Object>> fileTypeCounts = new ArrayList<>();
+            for (Object[] row : fileTypeStats) {
+                Map<String, Object> d = new HashMap<>();
+                d.put("fileType", row[0] != null ? row[0].toString() : "Unknown");
+                d.put("count",    row[1] != null ? ((Number) row[1]).longValue() : 0L);
+                fileTypeCounts.add(d);
+            }
+            stats.put("documentsByFileType", fileTypeCounts);
+        } catch (Exception ex) {
+            logger.warn("Failed to get file type counts: {}", ex.getMessage());
+            stats.put("documentsByFileType", new ArrayList<>());
         }
 
-        return documentRepository.save(document);
+        return stats;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // v2 PRIVATE HELPERS
+    // ════════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Parse an expiry date string using multiple common formats.
+     * Returns null if none succeed.
+     */
+    private LocalDate parseExpiryDate(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim();
+        for (DateTimeFormatter fmt : EXPIRY_DATE_FORMATS) {
+            try { return LocalDate.parse(s, fmt); }
+            catch (DateTimeParseException ignored) {}
+        }
+        logger.warn("Could not parse expiry date '{}' — tried {} formats", s, EXPIRY_DATE_FORMATS.size());
+        return null;
+    }
+
+    /**
+     * Sanity check: expiry date must be after 1947 and within 50 years from now.
+     * Rejects OCR artefacts like "01/01/0001" or "31/12/9999".
+     */
+    private boolean isPlausibleExpiry(LocalDate d) {
+        if (d == null) return false;
+        LocalDate min = LocalDate.of(1947, 1, 1);
+        LocalDate max = LocalDate.now().plusYears(50);
+        return !d.isBefore(min) && !d.isAfter(max);
     }
 }

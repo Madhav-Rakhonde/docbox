@@ -44,12 +44,10 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     Page<Document> findByUserAndIsArchivedFalse(User user, Pageable pageable);
 
-    // ✅ ADDED: Find archived documents by user
     List<Document> findByUserAndIsArchivedTrue(User user);
 
     Page<Document> findByUserAndIsArchivedTrue(User user, Pageable pageable);
 
-    // ✅ ADDED: Find archived documents for primary account (including sub-accounts)
     @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND d.isArchived = true ORDER BY d.updatedAt DESC")
     List<Document> findArchivedDocumentsForPrimaryAccount(@Param("userId") Long userId);
@@ -62,32 +60,28 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     Page<Document> findByUserAndIsFavoriteTrue(User user, Pageable pageable);
 
-    // ✅ ADDED: Find favorite documents for primary account (including sub-accounts)
     @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND d.isFavorite = true ORDER BY d.updatedAt DESC")
     List<Document> findFavoriteDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
-    /**
-     * Get storage used by category
-     */
-    @Query("SELECT COALESCE(SUM(d.fileSize), 0) FROM Document d " +
-            "JOIN d.category c " +
-            "WHERE d.user.id = :userId AND c.name = :categoryName")
-    Long getStorageByCategory(@Param("userId") Long userId, @Param("categoryName") String categoryName);
+    // ========================================
+    // CATEGORY QUERIES
+    // ========================================
 
-
-
-    // ✅ ADDED: Find by category and user
     List<Document> findByCategoryAndUser(DocumentCategory category, User user);
 
     Page<Document> findByCategoryAndUser(DocumentCategory category, User user, Pageable pageable);
 
-    // ✅ ADDED: Find by category for primary account (including sub-accounts)
     @Query("SELECT d FROM Document d WHERE d.category = :category " +
             "AND (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "ORDER BY d.createdAt DESC")
     List<Document> findByCategoryAndPrimaryAccount(@Param("category") DocumentCategory category,
                                                    @Param("userId") Long userId);
+
+    /**
+     * ✅ Used by DocumentService.deleteCategory() to block deletion when documents exist
+     */
+    long countByCategory(DocumentCategory category);
 
     // ========================================
     // EXPIRY QUERIES
@@ -105,7 +99,22 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
                                                 @Param("startDate") LocalDate startDate,
                                                 @Param("endDate") LocalDate endDate);
 
-    // Original search with pagination
+    /**
+     * ✅ Used by DocumentService.getExpiringDocuments() — sorted soonest-first
+     */
+    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+            "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
+            "AND d.expiryDate IS NOT NULL AND d.expiryDate BETWEEN :startDate AND :endDate " +
+            "AND d.isArchived = false ORDER BY d.expiryDate ASC")
+    List<Document> findExpiringDocuments(@Param("userId") Long userId,
+                                         @Param("startDate") LocalDate startDate,
+                                         @Param("endDate") LocalDate endDate);
+
+    // ========================================
+    // SEARCH QUERIES
+    // ========================================
+
+    // Paginated — primary account scope
     @Query("SELECT d FROM Document d WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
@@ -116,7 +125,19 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
                                    @Param("searchTerm") String searchTerm,
                                    Pageable pageable);
 
-    // ✅ ADDED: Search documents by user (no pagination)
+    /**
+     * ✅ Non-paginated — used by DocumentService.searchDocuments(String)
+     */
+    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+            "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
+            "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
+            "OR LOWER(d.documentNumber) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
+            "OR LOWER(d.notes) LIKE LOWER(CONCAT('%', :searchTerm, '%'))) " +
+            "AND d.isArchived = false ORDER BY d.createdAt DESC")
+    List<Document> searchDocuments(@Param("userId") Long userId,
+                                   @Param("searchTerm") String searchTerm);
+
+    // Search scoped to a single user (no sub-accounts)
     @Query("SELECT d FROM Document d WHERE d.user = :user " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.notes) LIKE LOWER(CONCAT('%', :query, '%')) " +
@@ -124,7 +145,7 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
             "ORDER BY d.createdAt DESC")
     List<Document> searchDocumentsByUser(@Param("user") User user, @Param("query") String query);
 
-    // ✅ ADDED: Search documents for primary account (including sub-accounts)
+    // Search scoped to primary account (including sub-accounts)
     @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.notes) LIKE LOWER(CONCAT('%', :query, '%')) " +
@@ -132,6 +153,14 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
             "ORDER BY d.createdAt DESC")
     List<Document> searchDocumentsForPrimaryAccount(@Param("userId") Long userId, @Param("query") String query);
 
+    // ========================================
+    // STORAGE / STATS QUERIES
+    // ========================================
+
+    @Query("SELECT COALESCE(SUM(d.fileSize), 0) FROM Document d " +
+            "JOIN d.category c " +
+            "WHERE d.user.id = :userId AND c.name = :categoryName")
+    Long getStorageByCategory(@Param("userId") Long userId, @Param("categoryName") String categoryName);
 
     @Query("SELECT SUM(d.fileSize) FROM Document d WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
     Long getTotalStorageUsed(@Param("userId") Long userId);
@@ -159,6 +188,9 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
             "GROUP BY d.fileType")
     List<Object[]> getStorageByFileType(@Param("userId") Long userId);
 
+    // ========================================
+    // OFFLINE QUERIES
+    // ========================================
 
     List<Document> findByUserAndIsOfflineAvailableTrue(User user);
 
@@ -171,24 +203,45 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     @Query("SELECT d FROM Document d WHERE d.user = :user AND d.isOfflineAvailable = true ORDER BY d.createdAt DESC")
     List<Document> findOfflineDocumentsByUser(@Param("user") User user);
 
+    // ========================================
+    // PRIMARY ACCOUNT QUERIES
+    // ========================================
 
-    // All documents for a primary account (including sub-accounts)
     @Query("SELECT d FROM Document d WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
     List<Document> findAllDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
     @Query("SELECT d FROM Document d WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
     Page<Document> findAllDocumentsForPrimaryAccount(@Param("userId") Long userId, Pageable pageable);
 
+    // ========================================
+    // DUPLICATE / HASH QUERIES
+    // ========================================
+
     Optional<Document> findByUserAndFileHash(User user, String fileHash);
 
-    /**
-     * ✅ Find all duplicates by hash across all users (for admin)
-     */
     List<Document> findByFileHash(String fileHash);
 
-    /**
-     * ✅ Check if duplicate exists for user
-     */
     @Query("SELECT COUNT(d) > 0 FROM Document d WHERE d.user.id = :userId AND d.fileHash = :fileHash")
     boolean existsByUserIdAndFileHash(@Param("userId") Long userId, @Param("fileHash") String fileHash);
+
+    /**
+     * ✅ Used by DocumentService.findDuplicates() — returns all docs whose hash
+     * appears more than once within the user's account family, grouped by hash.
+     */
+    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+            "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
+            "AND d.fileHash IS NOT NULL " +
+            "AND d.fileHash IN (" +
+            "  SELECT d2.fileHash FROM Document d2 " +
+            "  WHERE d2.user.id IN " +
+            "    (SELECT u2.id FROM User u2 WHERE u2.id = :userId OR u2.primaryAccount.id = :userId) " +
+            "  AND d2.fileHash IS NOT NULL " +
+            "  GROUP BY d2.fileHash HAVING COUNT(d2) > 1" +
+            ") ORDER BY d.fileHash, d.createdAt ASC")
+    List<Document> findDuplicateDocuments(@Param("userId") Long userId);
+    long countByUserId(Long userId);
+
+    List<Document> findByUserId(Long userId);
+
+
 }

@@ -4,6 +4,7 @@ import com.docbox.entity.Document;
 import com.docbox.entity.DocumentPermission;
 import com.docbox.entity.User;
 import com.docbox.enums.PermissionLevel;
+import jakarta.transaction.Transactional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -23,6 +24,9 @@ public interface DocumentPermissionRepository extends JpaRepository<DocumentPerm
 
     // Find permission for specific user and document
     Optional<DocumentPermission> findByDocumentAndUser(Document document, User user);
+
+    @Transactional
+    void deleteByDocument_Id(Long documentId);
 
     Optional<DocumentPermission> findByDocumentIdAndUserId(Long documentId, Long userId);
 

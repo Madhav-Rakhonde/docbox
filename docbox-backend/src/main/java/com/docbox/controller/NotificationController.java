@@ -36,7 +36,7 @@ public class NotificationController {
      * Get unread notifications count
      * GET /api/notifications/unread-count
      */
-    @GetMapping("/unread-count")
+    @GetMapping("/unread/count")
     public ResponseEntity<ApiResponse<Long>> getUnreadCount() {
         Long count = notificationService.getUnreadCount();
         return ResponseEntity.ok(ApiResponse.success("Unread count retrieved", count));

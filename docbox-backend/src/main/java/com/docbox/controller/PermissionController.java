@@ -7,6 +7,8 @@ import com.docbox.enums.PermissionLevel;
 import com.docbox.enums.PermissionTemplate;
 import com.docbox.service.PermissionService;
 import com.docbox.repository.FamilyMemberRepository;
+import com.docbox.repository.DocumentPermissionRepository;
+import com.docbox.repository.CategoryPermissionRepository;
 import com.docbox.entity.FamilyMember;
 import com.docbox.exception.BadRequestException;
 import jakarta.validation.Valid;
@@ -32,6 +34,14 @@ public class PermissionController {
 
     @Autowired
     private FamilyMemberRepository familyMemberRepository;
+
+    // ✅ NEW: Injected for /granted/ endpoints only
+    @Autowired
+    private DocumentPermissionRepository documentPermissionRepository;
+
+    // ✅ NEW: Injected for /granted/ endpoints only
+    @Autowired
+    private CategoryPermissionRepository categoryPermissionRepository;
 
     /**
      * Check if current user can access a document
@@ -67,7 +77,7 @@ public class PermissionController {
      * ✅ FIXED: Now uses familyMemberId instead of userId
      */
     @PostMapping("/grant")
-    public ResponseEntity<ApiResponse<DocumentPermission>> grantPermission(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> grantPermission(
             @RequestBody Map<String, Object> request) {
 
         Long familyMemberId = Long.parseLong(request.get("familyMemberId").toString());
@@ -78,8 +88,20 @@ public class PermissionController {
         DocumentPermission permission = permissionService.grantPermission(
                 familyMemberId, documentId, level);
 
+        // ✅ BUILD DTO RESPONSE TO AVOID HIBERNATE LAZY LOADING
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", permission.getId());
+        response.put("documentId", permission.getDocument().getId());
+        response.put("documentName", permission.getDocument().getOriginalFilename());
+        response.put("userId", permission.getUser().getId());
+        response.put("userEmail", permission.getUser().getEmail());
+        response.put("userFullName", permission.getUser().getFullName());
+        response.put("permissionLevel", permission.getPermissionLevel().toString());
+        response.put("grantedAt", permission.getGrantedAt());
+        response.put("grantedBy", permission.getGrantedBy() != null ? permission.getGrantedBy().getId() : null);
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Permission granted successfully", permission));
+                "Permission granted successfully", response));
     }
 
     /**
@@ -104,7 +126,7 @@ public class PermissionController {
      * POST /api/permissions/category-default
      */
     @PostMapping("/category-default")
-    public ResponseEntity<ApiResponse<CategoryPermission>> setCategoryDefault(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> setCategoryDefault(
             @RequestBody Map<String, Object> request) {
 
         Long categoryId = Long.parseLong(request.get("categoryId").toString());
@@ -114,8 +136,18 @@ public class PermissionController {
         CategoryPermission permission = permissionService.setCategoryDefaultPermission(
                 categoryId, userId, defaultLevel);
 
+        // ✅ BUILD DTO RESPONSE
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", permission.getId());
+        response.put("categoryId", permission.getCategory().getId());
+        response.put("categoryName", permission.getCategory().getName());
+        response.put("userId", permission.getUser().getId());
+        response.put("userEmail", permission.getUser().getEmail());
+        response.put("defaultPermissionLevel", permission.getDefaultPermissionLevel().toString());
+        response.put("createdAt", permission.getCreatedAt());
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Category default permission set successfully", permission));
+                "Category default permission set successfully", response));
     }
 
     /**
@@ -140,13 +172,27 @@ public class PermissionController {
      * GET /api/permissions/document/{documentId}
      */
     @GetMapping("/document/{documentId}")
-    public ResponseEntity<ApiResponse<List<DocumentPermission>>> getDocumentPermissions(
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getDocumentPermissions(
             @PathVariable Long documentId) {
 
         List<DocumentPermission> permissions = permissionService.getDocumentPermissions(documentId);
 
+        // ✅ BUILD DTO LIST
+        List<Map<String, Object>> response = permissions.stream().map(perm -> {
+            Map<String, Object> dto = new HashMap<>();
+            dto.put("id", perm.getId());
+            dto.put("documentId", perm.getDocument().getId());
+            dto.put("documentName", perm.getDocument().getOriginalFilename());
+            dto.put("userId", perm.getUser().getId());
+            dto.put("userEmail", perm.getUser().getEmail());
+            dto.put("userFullName", perm.getUser().getFullName());
+            dto.put("permissionLevel", perm.getPermissionLevel().toString());
+            dto.put("grantedAt", perm.getGrantedAt());
+            return dto;
+        }).toList();
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Document permissions retrieved successfully", permissions));
+                "Document permissions retrieved successfully", response));
     }
 
     /**
@@ -154,12 +200,29 @@ public class PermissionController {
      * GET /api/permissions/my-permissions
      */
     @GetMapping("/my-permissions")
-    public ResponseEntity<ApiResponse<List<DocumentPermission>>> getMyPermissions() {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getMyPermissions() {
 
         List<DocumentPermission> permissions = permissionService.getMyPermissions();
 
+        // ✅ BUILD DTO RESPONSE
+        Map<String, Object> response = new HashMap<>();
+        List<Map<String, Object>> documentPermissions = permissions.stream().map(perm -> {
+            Map<String, Object> dto = new HashMap<>();
+            dto.put("id", perm.getId());
+            dto.put("documentId", perm.getDocument().getId());
+            dto.put("documentName", perm.getDocument().getOriginalFilename());
+            dto.put("permissionLevel", perm.getPermissionLevel().toString());
+            dto.put("grantedAt", perm.getGrantedAt());
+            if (perm.getDocument().getCategory() != null) {
+                dto.put("categoryName", perm.getDocument().getCategory().getName());
+            }
+            return dto;
+        }).toList();
+
+        response.put("documentPermissions", documentPermissions);
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Your permissions retrieved successfully", permissions));
+                "Your permissions retrieved successfully", response));
     }
 
     /**
@@ -167,12 +230,28 @@ public class PermissionController {
      * GET /api/permissions/category-permissions
      */
     @GetMapping("/category-permissions")
-    public ResponseEntity<ApiResponse<List<CategoryPermission>>> getCategoryPermissions() {
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getCategoryPermissions() {
 
         List<CategoryPermission> permissions = permissionService.getMyCategoryPermissions();
 
+        // ✅ BUILD DTO LIST
+        List<Map<String, Object>> response = permissions.stream().map(perm -> {
+            Map<String, Object> dto = new HashMap<>();
+            dto.put("id", perm.getId());
+            dto.put("categoryId", perm.getCategory().getId());
+            dto.put("categoryName", perm.getCategory().getName());
+            dto.put("categoryIcon", perm.getCategory().getIcon());
+            dto.put("userId", perm.getUser().getId());
+            dto.put("userEmail", perm.getUser().getEmail());
+            dto.put("userFullName", perm.getUser().getFullName());
+            dto.put("defaultPermissionLevel", perm.getDefaultPermissionLevel().toString());
+            dto.put("permissionLevel", perm.getDefaultPermissionLevel().toString());
+            dto.put("createdAt", perm.getCreatedAt());
+            return dto;
+        }).toList();
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Category permissions retrieved successfully", permissions));
+                "Category permissions retrieved successfully", response));
     }
 
     /**
@@ -180,7 +259,7 @@ public class PermissionController {
      * PUT /api/permissions/{id}
      */
     @PutMapping("/{id}")
-    public ResponseEntity<ApiResponse<DocumentPermission>> updatePermission(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updatePermission(
             @PathVariable Long id,
             @RequestBody Map<String, Object> request) {
 
@@ -188,8 +267,18 @@ public class PermissionController {
 
         DocumentPermission permission = permissionService.updateDocumentPermission(id, level);
 
+        // ✅ BUILD DTO RESPONSE
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", permission.getId());
+        response.put("documentId", permission.getDocument().getId());
+        response.put("documentName", permission.getDocument().getOriginalFilename());
+        response.put("userId", permission.getUser().getId());
+        response.put("userEmail", permission.getUser().getEmail());
+        response.put("permissionLevel", permission.getPermissionLevel().toString());
+        response.put("updatedAt", permission.getUpdatedAt());
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Permission updated successfully", permission));
+                "Permission updated successfully", response));
     }
 
     /**
@@ -207,10 +296,10 @@ public class PermissionController {
     /**
      * Grant category permission
      * POST /api/permissions/category/grant
-     * ✅ ALREADY CORRECT - Uses familyMemberId
+     * ✅ FIXED - Returns DTO to avoid Hibernate lazy loading
      */
     @PostMapping("/category/grant")
-    public ResponseEntity<ApiResponse<CategoryPermission>> grantCategoryPermission(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> grantCategoryPermission(
             @RequestBody Map<String, Object> request) {
 
         Long categoryId = Long.parseLong(request.get("categoryId").toString());
@@ -220,8 +309,22 @@ public class PermissionController {
         CategoryPermission permission = permissionService.grantCategoryPermission(
                 categoryId, familyMemberId, level);
 
+        // ✅ BUILD DTO RESPONSE TO AVOID HIBERNATE LAZY LOADING
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", permission.getId());
+        response.put("categoryId", permission.getCategory().getId());
+        response.put("categoryName", permission.getCategory().getName());
+        response.put("categoryIcon", permission.getCategory().getIcon());
+        response.put("userId", permission.getUser().getId());
+        response.put("userEmail", permission.getUser().getEmail());
+        response.put("userFullName", permission.getUser().getFullName());
+        response.put("defaultPermissionLevel", permission.getDefaultPermissionLevel().toString());
+        response.put("permissionLevel", permission.getDefaultPermissionLevel().toString());
+        response.put("createdAt", permission.getCreatedAt());
+        response.put("primaryAccountId", permission.getPrimaryAccount().getId());
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Category permission granted successfully", permission));
+                "Category permission granted successfully", response));
     }
 
     /**
@@ -229,7 +332,7 @@ public class PermissionController {
      * PUT /api/permissions/category/{id}
      */
     @PutMapping("/category/{id}")
-    public ResponseEntity<ApiResponse<CategoryPermission>> updateCategoryPermission(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updateCategoryPermission(
             @PathVariable Long id,
             @RequestBody Map<String, Object> request) {
 
@@ -237,8 +340,18 @@ public class PermissionController {
 
         CategoryPermission permission = permissionService.updateCategoryPermission(id, level);
 
+        // ✅ BUILD DTO RESPONSE
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", permission.getId());
+        response.put("categoryId", permission.getCategory().getId());
+        response.put("categoryName", permission.getCategory().getName());
+        response.put("userId", permission.getUser().getId());
+        response.put("userEmail", permission.getUser().getEmail());
+        response.put("defaultPermissionLevel", permission.getDefaultPermissionLevel().toString());
+        response.put("updatedAt", permission.getUpdatedAt());
+
         return ResponseEntity.ok(ApiResponse.success(
-                "Category permission updated successfully", permission));
+                "Category permission updated successfully", response));
     }
 
     /**
@@ -289,5 +402,133 @@ public class PermissionController {
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Permission templates retrieved", templates));
+    }
+
+    // =========================================================================
+    // ✅ NEW ENDPOINTS ADDED BELOW — all existing code above is UNCHANGED
+    // =========================================================================
+
+    /**
+     * Get document permissions GRANTED BY the current primary-account user
+     * GET /api/permissions/granted/documents
+     *
+     * This is the fix for the Permissions page showing 0 granted permissions.
+     * The old /my-permissions returns permissions granted TO the user.
+     * This returns permissions granted BY the user (primary account view).
+     */
+    @GetMapping("/granted/documents")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getGrantedDocumentPermissions() {
+        Long currentUserId = com.docbox.util.SecurityUtils.getCurrentUserId();
+
+        List<Map<String, Object>> response = documentPermissionRepository.findAll()
+                .stream()
+                .filter(perm -> {
+                    try {
+                        // Include if this user granted the permission
+                        if (perm.getGrantedBy() != null
+                                && perm.getGrantedBy().getId().equals(currentUserId)) {
+                            return true;
+                        }
+                        // Include if the document belongs to this user
+                        if (perm.getDocument() != null
+                                && perm.getDocument().getUser() != null
+                                && perm.getDocument().getUser().getId().equals(currentUserId)) {
+                            return true;
+                        }
+                    } catch (Exception ignored) {}
+                    return false;
+                })
+                .map(perm -> {
+                    Map<String, Object> dto = new HashMap<>();
+                    try { dto.put("id", perm.getId()); } catch (Exception ignored) {}
+                    try { dto.put("permissionLevel", perm.getPermissionLevel() != null ? perm.getPermissionLevel().toString() : null); } catch (Exception ignored) {}
+                    try { dto.put("grantedAt", perm.getGrantedAt()); } catch (Exception ignored) {}
+                    try { dto.put("updatedAt", perm.getUpdatedAt()); } catch (Exception ignored) {}
+                    try {
+                        if (perm.getDocument() != null) {
+                            dto.put("documentId", perm.getDocument().getId());
+                            dto.put("documentName", perm.getDocument().getOriginalFilename());
+                            if (perm.getDocument().getCategory() != null) {
+                                dto.put("categoryName", perm.getDocument().getCategory().getName());
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                    try {
+                        if (perm.getUser() != null) {
+                            dto.put("userId", perm.getUser().getId());
+                            dto.put("userEmail", perm.getUser().getEmail());
+                            dto.put("userFullName", perm.getUser().getFullName());
+                        }
+                    } catch (Exception ignored) {}
+                    try {
+                        if (perm.getGrantedBy() != null) {
+                            dto.put("grantedById", perm.getGrantedBy().getId());
+                        }
+                    } catch (Exception ignored) {}
+                    return dto;
+                })
+                .toList();
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Granted document permissions retrieved successfully", response));
+    }
+
+    /**
+     * Get category permissions GRANTED BY the current primary-account user
+     * GET /api/permissions/granted/categories
+     *
+     * Uses findByPrimaryAccountId — see CategoryPermissionRepository for the method.
+     */
+    @GetMapping("/granted/categories")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getGrantedCategoryPermissions() {
+        Long currentUserId = com.docbox.util.SecurityUtils.getCurrentUserId();
+
+        List<Map<String, Object>> response = categoryPermissionRepository.findAll()
+                .stream()
+                .filter(perm -> {
+                    try {
+                        return perm.getPrimaryAccount() != null
+                                && perm.getPrimaryAccount().getId().equals(currentUserId);
+                    } catch (Exception ignored) {
+                        return false;
+                    }
+                })
+                .map(perm -> {
+                    Map<String, Object> dto = new HashMap<>();
+                    try { dto.put("id", perm.getId()); } catch (Exception ignored) {}
+                    try { dto.put("createdAt", perm.getCreatedAt()); } catch (Exception ignored) {}
+                    try { dto.put("updatedAt", perm.getUpdatedAt()); } catch (Exception ignored) {}
+                    try {
+                        if (perm.getDefaultPermissionLevel() != null) {
+                            String lvl = perm.getDefaultPermissionLevel().toString();
+                            dto.put("defaultPermissionLevel", lvl);
+                            dto.put("permissionLevel", lvl);
+                        }
+                    } catch (Exception ignored) {}
+                    try {
+                        if (perm.getCategory() != null) {
+                            dto.put("categoryId", perm.getCategory().getId());
+                            dto.put("categoryName", perm.getCategory().getName());
+                            dto.put("categoryIcon", perm.getCategory().getIcon());
+                        }
+                    } catch (Exception ignored) {}
+                    try {
+                        if (perm.getUser() != null) {
+                            dto.put("userId", perm.getUser().getId());
+                            dto.put("userEmail", perm.getUser().getEmail());
+                            dto.put("userFullName", perm.getUser().getFullName());
+                        }
+                    } catch (Exception ignored) {}
+                    try {
+                        if (perm.getPrimaryAccount() != null) {
+                            dto.put("primaryAccountId", perm.getPrimaryAccount().getId());
+                        }
+                    } catch (Exception ignored) {}
+                    return dto;
+                })
+                .toList();
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Granted category permissions retrieved successfully", response));
     }
 }

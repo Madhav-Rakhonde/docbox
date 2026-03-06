@@ -9,6 +9,7 @@ import com.docbox.repository.DocumentRepository;
 import com.docbox.repository.InAppNotificationRepository;
 import com.docbox.repository.UserRepository;
 import com.docbox.util.SecurityUtils;
+import com.fasterxml.jackson.databind.ObjectMapper; // ✅ ADDED for scheme metadata
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ import java.util.Map;
 /**
  * Notification Service
  * Handles BOTH email/SMS AND in-app notifications
+ * ✅ UPDATED: Now includes government scheme discovery notifications
  */
 @Service
 public class NotificationService {
@@ -56,8 +58,11 @@ public class NotificationService {
     @Autowired
     private InAppNotificationRepository inAppNotificationRepository;
 
+    // ✅ ADDED: For JSON serialization of scheme metadata
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     // ============================================
-    // IN-APP NOTIFICATION METHODS (NEW!)
+    // IN-APP NOTIFICATION METHODS
     // ============================================
 
     /**
@@ -215,7 +220,75 @@ public class NotificationService {
     }
 
     // ============================================
-    // EMAIL/SMS NOTIFICATION METHODS (EXISTING - UNCHANGED)
+    // ✅ NEW: GOVERNMENT SCHEME DISCOVERY NOTIFICATIONS
+    // ============================================
+
+    /**
+     * Create scheme discovery notifications
+     * Called by FreeSchemeDiscoveryService after discovering eligible schemes
+     */
+    @Transactional
+    public void createSchemeNotifications(User user, List<FreeSchemeDiscoveryService.DiscoveredScheme> schemes) {
+        try {
+            logger.info("📲 Creating {} scheme notifications for user {}", schemes.size(), user.getId());
+
+            for (FreeSchemeDiscoveryService.DiscoveredScheme scheme : schemes) {
+                // Build notification message
+                StringBuilder message = new StringBuilder();
+                message.append("You may be eligible for ").append(scheme.getName()).append(". ");
+
+                if (scheme.getAmount() != null && scheme.getAmount() > 0) {
+                    message.append("Amount: ₹").append(String.format("%,d", scheme.getAmount())).append(". ");
+                }
+
+                if (scheme.getDescription() != null && !scheme.getDescription().isEmpty()) {
+                    String desc = scheme.getDescription();
+                    if (desc.length() > 150) {
+                        desc = desc.substring(0, 147) + "...";
+                    }
+                    message.append(desc);
+                }
+
+                // Create notification using existing method
+                InAppNotification notification = createInAppNotification(
+                        user.getId(),
+                        "SCHEME_DISCOVERY",
+                        "New Scheme: " + scheme.getName(),
+                        message.toString(),
+                        "/schemes"
+                );
+
+                // Add scheme metadata (JSON)
+                try {
+                    Map<String, Object> metadata = new HashMap<>();
+                    metadata.put("schemeId", scheme.getName().hashCode());
+                    metadata.put("schemeName", scheme.getName());
+                    metadata.put("category", scheme.getCategory());
+                    metadata.put("amount", scheme.getAmount());
+                    metadata.put("applicationUrl", scheme.getApplicationUrl());
+                    metadata.put("issuingAuthority", scheme.getIssuingAuthority());
+
+                    String metadataJson = objectMapper.writeValueAsString(metadata);
+                    notification.setMetadata(metadataJson);
+                    inAppNotificationRepository.save(notification);
+
+                } catch (Exception ex) {
+                    logger.warn("Failed to serialize scheme metadata for notification {}: {}",
+                            notification.getId(), ex.getMessage());
+                }
+            }
+
+            logger.info("✅ Successfully created {} scheme notifications for user {}",
+                    schemes.size(), user.getId());
+
+        } catch (Exception ex) {
+            logger.error("❌ Failed to create scheme notifications for user {}: {}",
+                    user.getId(), ex.getMessage(), ex);
+        }
+    }
+
+    // ============================================
+    // EMAIL/SMS NOTIFICATION METHODS (UNCHANGED)
     // ============================================
 
     /**
@@ -254,7 +327,7 @@ public class NotificationService {
             sendSMS(user.getPhoneNumber(), smsText);
         }
 
-        // In-app notification (NEW!)
+        // In-app notification
         notifyDocumentExpiring(
                 user.getId(),
                 document.getCategory().getName(),
@@ -326,7 +399,7 @@ public class NotificationService {
             sendEmail(recipientEmail, subject, body);
         }
 
-        // In-app notification if recipient is a user (NEW!)
+        // In-app notification if recipient is a user
         try {
             User recipient = userRepository.findByEmail(recipientEmail)
                     .orElse(null);
@@ -365,7 +438,7 @@ public class NotificationService {
                     // Email notification
                     sendBatchExpiryReminder(user, expiringDocs, daysThreshold);
 
-                    // In-app notifications (NEW!)
+                    // In-app notifications
                     for (Document doc : expiringDocs) {
                         int daysLeft = (int) java.time.temporal.ChronoUnit.DAYS.between(
                                 LocalDate.now(), doc.getExpiryDate());
@@ -423,7 +496,7 @@ public class NotificationService {
     }
 
     // ============================================
-    // EMAIL TEMPLATE BUILDERS (EXISTING - UNCHANGED)
+    // EMAIL TEMPLATE BUILDERS (UNCHANGED)
     // ============================================
 
     private String buildWelcomeEmailBody(User user) {
@@ -552,7 +625,7 @@ public class NotificationService {
     }
 
     // ============================================
-    // STUB IMPLEMENTATIONS (Replace with real providers)
+    // STUB IMPLEMENTATIONS (UNCHANGED)
     // ============================================
 
     /**
@@ -560,13 +633,8 @@ public class NotificationService {
      */
     private void sendEmail(String to, String subject, String body) {
         // TODO: Integrate with email provider
-        // Example: SendGrid, AWS SES, Mailgun, SMTP
-
         logger.info("EMAIL SENT [STUB]: to={}, subject={}", to, subject);
         logger.debug("EMAIL BODY: {}", body);
-
-        // In production:
-        // emailProvider.send(to, subject, body);
     }
 
     /**
@@ -576,14 +644,7 @@ public class NotificationService {
         if (phoneNumber == null || phoneNumber.isEmpty()) {
             return;
         }
-
-        // TODO: Integrate with SMS provider
-        // Example: Twilio, AWS SNS, MSG91
-
         logger.info("SMS SENT [STUB]: to={}, message={}", phoneNumber, message);
-
-        // In production:
-        // smsProvider.send(phoneNumber, message);
     }
 
     /**
@@ -593,14 +654,7 @@ public class NotificationService {
         if (!whatsappEnabled || phoneNumber == null) {
             return;
         }
-
-        // TODO: Integrate with WhatsApp Business API
-        // Example: Twilio WhatsApp, MessageBird
-
         logger.info("WHATSAPP SENT [STUB]: to={}, message={}", phoneNumber, message);
-
-        // In production:
-        // whatsappProvider.send(phoneNumber, message);
     }
 
     /**
@@ -612,12 +666,10 @@ public class NotificationService {
         stats.put("smsEnabled", smsEnabled);
         stats.put("whatsappEnabled", whatsappEnabled);
         stats.put("fromEmail", fromEmail);
-
-        // In production, track actual sent counts
         stats.put("emailsSentToday", 0);
         stats.put("smsSentToday", 0);
 
-        // In-app notification stats (NEW!)
+        // In-app notification stats
         try {
             Long userId = SecurityUtils.getCurrentUserId();
             Long unreadCount = inAppNotificationRepository.countByUserIdAndIsRead(userId, false);
