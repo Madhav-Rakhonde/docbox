@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import api from '../../services/api';
 import {
   Drawer,
   List,
@@ -48,7 +49,7 @@ const NAV_GROUPS = [
     label: 'Discover',
     items: [
       { text: 'Eligible Schemes', icon: CardGiftcard, path: '/schemes' },
-      { text: 'Notifications',  icon: Notifications,  path: '/notifications', badge: 3 },
+      { text: 'Notifications',  icon: Notifications,  path: '/notifications', isNotification: true },
     ],
   },
   {
@@ -76,6 +77,20 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
   const navigate  = useNavigate();
   const location  = useLocation();
   const { user }  = useAuth();
+  const [notificationCount, setNotificationCount] = useState(0);
+
+  useEffect(() => {
+    loadNotificationCount();
+    const interval = setInterval(loadNotificationCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadNotificationCount = async () => {
+    try {
+      const response = await api.get('/notifications/unread/count');
+      if (response.data.success) setNotificationCount(response.data.data.count || 0);
+    } catch { /* silent */ }
+  };
 
   const handleNavigation = (path) => {
     navigate(path);
@@ -232,24 +247,12 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
                       }}
                     >
                       <ListItemIcon sx={{ minWidth: 36 }}>
-                        {item.badge ? (
-                          <Badge badgeContent={item.badge} color="error" sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
-                            <Icon
-                              sx={{
-                                fontSize: 18,
-                                color: active ? '#818CF8' : '#475569',
-                                transition: 'color 150ms',
-                              }}
-                            />
+                        {item.isNotification && notificationCount > 0 ? (
+                          <Badge badgeContent={notificationCount} color="error" max={99} sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
+                            <Icon sx={{ fontSize: 18, color: active ? '#818CF8' : '#475569', transition: 'color 150ms' }} />
                           </Badge>
                         ) : (
-                          <Icon
-                            sx={{
-                              fontSize: 18,
-                              color: active ? '#818CF8' : '#475569',
-                              transition: 'color 150ms',
-                            }}
-                          />
+                          <Icon sx={{ fontSize: 18, color: active ? '#818CF8' : '#475569', transition: 'color 150ms' }} />
                         )}
                       </ListItemIcon>
                       <ListItemText
