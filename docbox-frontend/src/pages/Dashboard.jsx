@@ -1,76 +1,154 @@
 import React, { useEffect, useState } from 'react';
-import { Container, Grid, Box, Typography, Button, CircularProgress } from '@mui/material';
 import {
-  Description,
-  Storage,
-  Warning,
-  People,
-  CloudUpload,
-  Analytics as AnalyticsIcon,
+  Container, Grid, Box, Typography, Button,
+  CircularProgress, Paper, Skeleton,
+} from '@mui/material';
+import {
+  Description, Storage, Warning, People,
+  CloudUpload, Analytics as AnalyticsIcon,
+  ArrowForward, TrendingUp,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import { useAuth } from '../contexts/AuthContext';
 import StatsCard from '../components/Dashboard/StatsCard';
 import RecentDocuments from '../components/Dashboard/RecentDocuments';
 import ExpiryAlerts from '../components/Dashboard/ExpiryAlerts';
 import analyticsService from '../services/analyticsService';
 import documentService from '../services/documentService';
 
+// ─── Stat Card ────────────────────────────────────────────────────────────────
+const MetricCard = ({ title, value, subtitle, icon: Icon, accent, loading }) => (
+  <Paper
+    elevation={0}
+    sx={{
+      p: 3,
+      borderRadius: '16px',
+      border: '1px solid',
+      borderColor: 'divider',
+      background: '#FFFFFF',
+      position: 'relative',
+      overflow: 'hidden',
+      transition: 'transform 200ms ease, box-shadow 200ms ease',
+      '&:hover': {
+        transform: 'translateY(-2px)',
+        boxShadow: '0 8px 24px rgba(15,23,42,0.08)',
+      },
+    }}
+  >
+    {/* Accent top bar */}
+    <Box sx={{
+      position: 'absolute', top: 0, left: 0, right: 0,
+      height: 3,
+      background: accent,
+      borderRadius: '16px 16px 0 0',
+    }} />
+
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+      <Box>
+        <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 1 }}>
+          {title}
+        </Typography>
+        {loading
+          ? <Skeleton variant="text" width={80} height={40} />
+          : (
+            <Typography sx={{ fontSize: '2rem', fontWeight: 700, color: '#0F172A', lineHeight: 1, mb: 0.5, letterSpacing: '-0.03em' }}>
+              {value}
+            </Typography>
+          )
+        }
+        <Typography sx={{ fontSize: '0.8rem', color: '#94A3B8' }}>
+          {subtitle}
+        </Typography>
+      </Box>
+      <Box sx={{
+        width: 48, height: 48,
+        borderRadius: '12px',
+        background: accent.includes('gradient') ? accent : `${accent}18`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+      }}>
+        <Icon sx={{ fontSize: 22, color: accent.includes('#') && !accent.includes('gradient') ? accent : 'white' }} />
+      </Box>
+    </Box>
+  </Paper>
+);
+
+// ─── Quick Action Card ────────────────────────────────────────────────────────
+const QuickAction = ({ icon: Icon, label, description, onClick, accent }) => (
+  <Box
+    onClick={onClick}
+    sx={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 2,
+      p: 2.5,
+      borderRadius: '12px',
+      border: '1px solid #E2E8F0',
+      background: '#FFFFFF',
+      cursor: 'pointer',
+      transition: 'all 180ms ease',
+      '&:hover': {
+        borderColor: accent,
+        boxShadow: `0 0 0 3px ${accent}18, 0 4px 12px rgba(15,23,42,0.06)`,
+        transform: 'translateY(-1px)',
+      },
+    }}
+  >
+    <Box sx={{
+      width: 44, height: 44,
+      borderRadius: '10px',
+      background: `${accent}15`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0,
+    }}>
+      <Icon sx={{ fontSize: 20, color: accent }} />
+    </Box>
+    <Box sx={{ flex: 1 }}>
+      <Typography sx={{ fontWeight: 600, fontSize: '0.9rem', color: '#0F172A' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.78rem', color: '#64748B' }}>{description}</Typography>
+    </Box>
+    <ArrowForward sx={{ fontSize: 16, color: '#CBD5E1' }} />
+  </Box>
+);
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState(null);
+  const navigate   = useNavigate();
+  const { user }   = useAuth();
+  const [loading, setLoading]     = useState(true);
+  const [stats, setStats]         = useState(null);
   const [recentDocs, setRecentDocs] = useState([]);
   const [expiryData, setExpiryData] = useState(null);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
+  useEffect(() => { loadDashboardData(); }, []);
 
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-
-      // Load all data in parallel
       const [statsRes, docsRes, expiryRes] = await Promise.all([
         analyticsService.getDashboardStats().catch(() => null),
         documentService.getDocuments(0, 5).catch(() => null),
         analyticsService.getExpiryInsights().catch(() => null),
       ]);
 
-      if (statsRes?.success) {
-        setStats(statsRes.data);
-      }
+      if (statsRes?.success) setStats(statsRes.data);
 
-      // ✅ FIX: Handle all possible response structures
       if (docsRes) {
         let docs = [];
-
         if (docsRes.success && docsRes.data) {
-          const data = docsRes.data;
-          // Try all possible locations where documents might be
-          docs =
-            data.documents ||    // { documents: [...] }
-            data.content ||      // { content: [...] }  (Spring Page)
-            data.data?.documents ||
-            data.data?.content ||
-            (Array.isArray(data) ? data : []);
+          const d = docsRes.data;
+          docs = d.documents || d.content || d.data?.documents || d.data?.content || (Array.isArray(d) ? d : []);
         } else if (docsRes.data) {
-          const data = docsRes.data;
-          docs =
-            data.documents ||
-            data.content ||
-            (Array.isArray(data) ? data : []);
+          const d = docsRes.data;
+          docs = d.documents || d.content || (Array.isArray(d) ? d : []);
         } else if (Array.isArray(docsRes)) {
           docs = docsRes;
         }
-
         setRecentDocs(Array.isArray(docs) ? docs : []);
       }
 
-      if (expiryRes?.success) {
-        setExpiryData(expiryRes.data);
-      }
+      if (expiryRes?.success) setExpiryData(expiryRes.data);
     } catch (error) {
       console.error('Dashboard error:', error);
       toast.error('Failed to load dashboard data');
@@ -87,91 +165,102 @@ const Dashboard = () => {
     return `${(mb / 1024).toFixed(2)} GB`;
   };
 
-  if (loading) {
-    return (
-      <Container maxWidth="lg">
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
-          <CircularProgress size={60} />
-        </Box>
-      </Container>
-    );
-  }
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
 
   return (
-    <Container maxWidth="lg">
-      {/* Header */}
+    <Container maxWidth="lg" sx={{ animation: 'fadeUp 0.35s ease both' }}>
+      {/* ── Header ── */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight="bold">
-          Dashboard
+        <Typography sx={{
+          fontFamily: "'DM Serif Display', serif",
+          fontSize: { xs: '1.75rem', sm: '2.25rem' },
+          fontWeight: 400,
+          color: '#0F172A',
+          letterSpacing: '-0.02em',
+          lineHeight: 1.2,
+          mb: 0.5,
+        }}>
+          {greeting()}, {user?.fullName?.split(' ')[0]} 👋
         </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Welcome back! Here's what's happening with your documents.
+        <Typography sx={{ color: '#64748B', fontSize: '0.9375rem' }}>
+          Here's what's happening with your documents today.
         </Typography>
       </Box>
 
-      {/* Quick Actions */}
-      <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        <Button
-          variant="contained"
-          startIcon={<CloudUpload />}
-          onClick={() => navigate('/documents')}
-          size="large"
-        >
-          Upload Document
-        </Button>
-        <Button
-          variant="outlined"
-          startIcon={<AnalyticsIcon />}
-          onClick={() => navigate('/analytics')}
-        >
-          View Analytics
-        </Button>
-      </Box>
-
-      {/* Stats Cards - 2x2 Grid */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6}>
-          <StatsCard
-            title="Total Documents"
-            value={stats?.totalDocuments || 0}
-            subtitle="All your documents"
-            icon={Description}
-            color="primary"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6}>
-          <StatsCard
-            title="Storage Used"
-            value={formatBytes(stats?.storageUsedBytes)}
-            subtitle={`${stats?.storagePercentage?.toFixed(1) || 0}% of limit`}
-            icon={Storage}
-            color="secondary"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6}>
-          <StatsCard
-            title="Expiring Soon"
-            value={stats?.documentsExpiringSoon || 0}
-            subtitle="In next 30 days"
-            icon={Warning}
-            color="warning"
-          />
-        </Grid>
-        <Grid item xs={12} sm={6}>
-          <StatsCard
-            title="Family Members"
-            value={stats?.totalFamilyMembers || 0}
-            subtitle="Active members"
-            icon={People}
-            color="success"
-          />
-        </Grid>
+      {/* ── Metric Cards ── */}
+      <Grid container spacing={2.5} sx={{ mb: 3 }}>
+        {[
+          {
+            title: 'Total Documents',
+            value: stats?.totalDocuments ?? '—',
+            subtitle: 'All stored documents',
+            icon: Description,
+            accent: '#6366F1',
+          },
+          {
+            title: 'Storage Used',
+            value: formatBytes(stats?.storageUsedBytes),
+            subtitle: `${stats?.storagePercentage?.toFixed(1) ?? 0}% of your limit`,
+            icon: Storage,
+            accent: '#3B82F6',
+          },
+          {
+            title: 'Expiring Soon',
+            value: stats?.documentsExpiringSoon ?? '—',
+            subtitle: 'Within next 30 days',
+            icon: Warning,
+            accent: '#F59E0B',
+          },
+          {
+            title: 'Family Members',
+            value: stats?.totalFamilyMembers ?? '—',
+            subtitle: 'Active collaborators',
+            icon: People,
+            accent: '#10B981',
+          },
+        ].map((card) => (
+          <Grid item xs={12} sm={6} key={card.title}>
+            <MetricCard {...card} loading={loading} />
+          </Grid>
+        ))}
       </Grid>
 
-      {/* Recent Documents & Alerts */}
-      <Grid container spacing={3}>
+      {/* ── Quick Actions ── */}
+      <Box sx={{ mb: 3 }}>
+        <Typography sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.07em', mb: 1.5 }}>
+          Quick Actions
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6}>
+            <QuickAction
+              icon={CloudUpload}
+              label="Upload Document"
+              description="Add new files to your vault"
+              onClick={() => navigate('/documents')}
+              accent="#6366F1"
+            />
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <QuickAction
+              icon={AnalyticsIcon}
+              label="View Analytics"
+              description="Storage & usage insights"
+              onClick={() => navigate('/analytics')}
+              accent="#3B82F6"
+            />
+          </Grid>
+        </Grid>
+      </Box>
+
+      {/* ── Recent & Alerts ── */}
+      <Grid container spacing={2.5}>
         <Grid item xs={12} md={6}>
-          <RecentDocuments documents={recentDocs} loading={false} />
+          <RecentDocuments documents={recentDocs} loading={loading} />
         </Grid>
         <Grid item xs={12} md={6}>
           <ExpiryAlerts

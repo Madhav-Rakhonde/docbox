@@ -1,102 +1,148 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Container,
-  Box,
-  Typography,
-  Button,
-  Grid,
-  Card,
-  CardContent,
-  IconButton,
-  Avatar,
-  Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  MenuItem,
-  CircularProgress,
-  Alert,
-  FormControl,
-  InputLabel,
-  Select,
-  FormHelperText,
-  Divider,
-  Menu,
-  ListItemIcon,
-  ListItemText,
+  Container, Box, Typography, Button, Grid, Card, CardContent,
+  IconButton, Avatar, Chip, Dialog, DialogTitle, DialogContent,
+  DialogActions, TextField, MenuItem, CircularProgress, Alert,
+  FormControl, InputLabel, Select, FormHelperText, Divider,
+  Menu, ListItemIcon, ListItemText,
 } from '@mui/material';
 import {
-  Add,
-  Edit,
-  Delete,
-  Person,
-  Email,
-  Phone,
-  Cake,
-  Badge,
-  SupervisorAccount,
-  MoreVert,
-  Security,
-  Lock,
-  LockOpen,
+  Add, Edit, Delete, Person, Email, Phone, Cake,
+  SupervisorAccount, MoreVert, Security, Lock, LockOpen,
+  Badge as BadgeIcon,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 
+const RELATIONSHIPS = [
+  'Father','Mother','Spouse','Son','Daughter','Brother','Sister',
+  'Grandfather','Grandmother','Uncle','Aunt','Cousin','Child','Other',
+];
+
+const ROLES = [
+  { value: 'PROFILE_ONLY', label: 'Profile Only (No Login)',  description: 'Can be linked to documents but cannot login' },
+  { value: 'SUB_ACCOUNT',  label: 'Sub Account (Can Login)',  description: 'Can login and view their documents' },
+];
+
+const ROLE_CONFIG = {
+  PRIMARY_ACCOUNT: { label: 'Primary Account', color: '#6366F1', bg: '#EEF2FF' },
+  SUB_ACCOUNT:     { label: 'Can Login',        color: '#10B981', bg: '#ECFDF5' },
+  PROFILE_ONLY:    { label: 'Profile Only',     color: '#64748B', bg: '#F8FAFC' },
+};
+
+const getRoleConfig = (role) => ROLE_CONFIG[role] || ROLE_CONFIG.PROFILE_ONLY;
+
+// ─── Member Card ──────────────────────────────────────────────────────────────
+const MemberCard = ({ member, role, onMenuOpen }) => {
+  const rc = getRoleConfig(role);
+  return (
+    <Card elevation={0} sx={{
+      height: '100%', display: 'flex', flexDirection: 'column',
+      borderRadius: '14px', border: '1px solid #E2E8F0', position: 'relative',
+      transition: 'transform 200ms ease, box-shadow 200ms ease',
+      '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 24px rgba(15,23,42,0.08)' },
+    }}>
+      {/* Top accent */}
+      <Box sx={{ height: 3, background: rc.color, borderRadius: '14px 14px 0 0' }} />
+
+      <IconButton size="small" onClick={(e) => onMenuOpen(e, member)}
+        sx={{ position: 'absolute', top: 10, right: 8, color: '#94A3B8', '&:hover': { color: '#475569', background: '#F1F5F9' } }}>
+        <MoreVert sx={{ fontSize: 18 }} />
+      </IconButton>
+
+      <CardContent sx={{ flex: 1, p: 2.5, pt: 2 }}>
+        {/* Avatar + Name */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+          <Avatar sx={{
+            width: 48, height: 48, flexShrink: 0,
+            background: `linear-gradient(135deg, ${rc.color}cc, ${rc.color})`,
+            fontWeight: 700, fontSize: '1.1rem',
+          }}>
+            {member.name.charAt(0).toUpperCase()}
+          </Avatar>
+          <Box sx={{ overflow: 'hidden', flex: 1, pr: 3 }}>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', color: '#0F172A',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {member.name}
+            </Typography>
+            <Box sx={{ display: 'inline-flex', mt: 0.25, px: 1, py: 0.2, borderRadius: '4px',
+              background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)' }}>
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: '#6366F1' }}>
+                {member.relationship}
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+
+        <Divider sx={{ mb: 1.5 }} />
+
+        {/* Role chip */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          {role === 'SUB_ACCOUNT'
+            ? <LockOpen sx={{ fontSize: 14, color: rc.color }} />
+            : <Lock sx={{ fontSize: 14, color: rc.color }} />
+          }
+          <Box sx={{ px: 1, py: 0.2, borderRadius: '4px', background: rc.bg, border: `1px solid ${rc.color}25` }}>
+            <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: rc.color }}>
+              {rc.label}
+            </Typography>
+          </Box>
+          {role === 'SUB_ACCOUNT' && (
+            <Box sx={{ ml: 'auto', px: 1, py: 0.2, borderRadius: '4px', background: '#ECFDF5', border: '1px solid #A7F3D0' }}>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#059669', letterSpacing: '0.05em' }}>ACTIVE</Typography>
+            </Box>
+          )}
+        </Box>
+
+        {/* Details */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 1.5 }}>
+          {[
+            { icon: Email, value: member.email || 'No email' },
+            member.phoneNumber && { icon: Phone, value: member.phoneNumber },
+            member.dateOfBirth && { icon: Cake, value: new Date(member.dateOfBirth).toLocaleDateString('en-IN') },
+            member.username && { icon: Person, value: `@${member.username}` },
+          ].filter(Boolean).map(({ icon: Icon, value }) => (
+            <Box key={value} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Icon sx={{ fontSize: 13, color: '#CBD5E1', flexShrink: 0 }} />
+              <Typography sx={{ fontSize: '0.78rem', color: '#64748B',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </CardContent>
+
+      <Box sx={{ px: 2.5, pb: 2, borderTop: '1px solid #F1F5F9', pt: 1.5 }}>
+        <Typography sx={{ fontSize: '0.72rem', color: '#94A3B8' }}>
+          Added {member.createdAt ? new Date(member.createdAt).toLocaleDateString('en-IN') : 'N/A'}
+        </Typography>
+      </Box>
+    </Card>
+  );
+};
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 const FamilyMembers = () => {
   const navigate = useNavigate();
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [members, setMembers]             = useState([]);
+  const [loading, setLoading]             = useState(true);
+  const [dialogOpen, setDialogOpen]       = useState(false);
   const [editingMember, setEditingMember] = useState(null);
-  const [anchorEl, setAnchorEl] = useState(null);
+  const [anchorEl, setAnchorEl]           = useState(null);
   const [selectedMember, setSelectedMember] = useState(null);
   const [formData, setFormData] = useState({
-    name: '',
-    relationship: '',
-    dateOfBirth: '',
-    email: '',
-    phoneNumber: '',
-    role: 'PROFILE_ONLY',
-    username: '',
-    password: '',
+    name: '', relationship: '', dateOfBirth: '',
+    email: '', phoneNumber: '', role: 'PROFILE_ONLY', username: '', password: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
-  const relationships = [
-    'Father',
-    'Mother',
-    'Spouse',
-    'Son',
-    'Daughter',
-    'Brother',
-    'Sister',
-    'Grandfather',
-    'Grandmother',
-    'Uncle',
-    'Aunt',
-    'Cousin',
-    'Child',
-    'Other',
-  ];
+  useEffect(() => { loadMembers(); }, []);
 
-  const roles = [
-    { value: 'PROFILE_ONLY', label: 'Profile Only (No Login)', description: 'Can be linked to documents but cannot login' },
-    { value: 'SUB_ACCOUNT', label: 'Sub Account (Can Login)', description: 'Can login and view their documents' },
-  ];
-
-  useEffect(() => {
-    loadMembers();
-  }, []);
-
-  // ✅ FIX: Derive role from backend response - userId presence = SUB_ACCOUNT
   const deriveRole = (m) => {
     if (m.role === 'PRIMARY_ACCOUNT') return 'PRIMARY_ACCOUNT';
-    // Backend family_members has userId field - if present, it's a SUB_ACCOUNT
     if (m.userId || m.user_id) return 'SUB_ACCOUNT';
     return 'PROFILE_ONLY';
   };
@@ -107,557 +153,241 @@ const FamilyMembers = () => {
       const response = await api.get('/family-members');
       if (response.data.success) {
         const raw = response.data.data || [];
-        const normalized = raw.map((m) => ({ ...m, role: deriveRole(m) }));
-        setMembers(normalized);
+        setMembers(raw.map((m) => ({ ...m, role: deriveRole(m) })));
       }
-    } catch (error) {
-      console.error('Failed to load family members:', error);
-      toast.error('Failed to load family members');
-    } finally {
-      setLoading(false);
-    }
+    } catch { toast.error('Failed to load family members'); }
+    finally { setLoading(false); }
   };
 
-  const handleMenuOpen = (event, member) => {
-    event.stopPropagation();
-    setAnchorEl(event.currentTarget);
-    setSelectedMember(member);
-  };
+  const handleMenuOpen = (e, m) => { e.stopPropagation(); setAnchorEl(e.currentTarget); setSelectedMember(m); };
+  const handleMenuClose = () => { setAnchorEl(null); setSelectedMember(null); };
 
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-    setSelectedMember(null);
-  };
-
-  const handleEditClick = () => {
-    handleMenuClose();
-    handleOpenDialog(selectedMember);
-  };
-
-  const handleManagePermissionsClick = () => {
-    handleMenuClose();
-    navigate(`/permissions?member=${selectedMember.id}`);
-  };
-
-  const handleDeleteClick = () => {
-    handleMenuClose();
-    handleDelete(selectedMember.id);
-  };
+  const handleEditClick = () => { handleMenuClose(); handleOpenDialog(selectedMember); };
+  const handleManagePermissionsClick = () => { handleMenuClose(); navigate(`/permissions?member=${selectedMember.id}`); };
+  const handleDeleteClick = () => { handleMenuClose(); handleDelete(selectedMember.id); };
 
   const handleOpenDialog = (member = null) => {
     if (member) {
       setEditingMember(member);
       const memberRole = deriveRole(member);
-
-      // ✅ FIX: Pre-fill email and username when editing
-      setFormData({
-        name: member.name || '',
-        relationship: member.relationship || '',
-        dateOfBirth: member.dateOfBirth || '',
-        email: member.email || '',              // ← FIX: Show existing email
-        phoneNumber: member.phoneNumber || '',
-        role: memberRole,
-        username: member.username || '',         // ← FIX: Show existing username
-        password: '',                            // Leave blank - user can change if needed
-      });
+      setFormData({ name: member.name || '', relationship: member.relationship || '',
+        dateOfBirth: member.dateOfBirth || '', email: member.email || '',
+        phoneNumber: member.phoneNumber || '', role: memberRole,
+        username: member.username || '', password: '' });
     } else {
       setEditingMember(null);
-      setFormData({
-        name: '',
-        relationship: '',
-        dateOfBirth: '',
-        email: '',
-        phoneNumber: '',
-        role: 'PROFILE_ONLY',
-        username: '',
-        password: '',
-      });
+      setFormData({ name:'',relationship:'',dateOfBirth:'',email:'',phoneNumber:'',role:'PROFILE_ONLY',username:'',password:'' });
     }
     setFormErrors({});
     setDialogOpen(true);
   };
 
   const handleCloseDialog = () => {
-    setDialogOpen(false);
-    setEditingMember(null);
-    setFormData({
-      name: '',
-      relationship: '',
-      dateOfBirth: '',
-      email: '',
-      phoneNumber: '',
-      role: 'PROFILE_ONLY',
-      username: '',
-      password: '',
-    });
+    setDialogOpen(false); setEditingMember(null);
+    setFormData({ name:'',relationship:'',dateOfBirth:'',email:'',phoneNumber:'',role:'PROFILE_ONLY',username:'',password:'' });
     setFormErrors({});
   };
 
   const validateForm = () => {
     const errors = {};
-
-    if (!formData.name.trim()) {
-      errors.name = 'Name is required';
-    }
-
-    if (!formData.relationship) {
-      errors.relationship = 'Relationship is required';
-    }
-
+    if (!formData.name.trim()) errors.name = 'Name is required';
+    if (!formData.relationship) errors.relationship = 'Relationship is required';
     if (formData.role === 'SUB_ACCOUNT') {
-      if (!formData.username.trim()) {
-        errors.username = 'Username is required for sub accounts';
-      }
-      if (!editingMember && !formData.password) {
-        errors.password = 'Password is required for new sub accounts';
-      }
-      if (formData.password && formData.password.length < 6) {
-        errors.password = 'Password must be at least 6 characters';
-      }
+      if (!formData.username.trim()) errors.username = 'Username is required for sub accounts';
+      if (!editingMember && !formData.password) errors.password = 'Password is required for new sub accounts';
+      if (formData.password && formData.password.length < 6) errors.password = 'Minimum 6 characters';
     }
-
-    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      errors.email = 'Invalid email format';
-    }
-
-    if (formData.phoneNumber && !/^\d{10}$/.test(formData.phoneNumber.replace(/\D/g, ''))) {
-      errors.phoneNumber = 'Phone number must be 10 digits';
-    }
-
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) errors.email = 'Invalid email format';
+    if (formData.phoneNumber && !/^\d{10}$/.test(formData.phoneNumber.replace(/\D/g, ''))) errors.phoneNumber = 'Phone must be 10 digits';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) {
-      toast.error('Please fix the errors in the form');
-      return;
-    }
-
+    if (!validateForm()) { toast.error('Please fix the errors'); return; }
     try {
       setSubmitting(true);
-
       const payload = {
-        name: formData.name.trim(),
-        relationship: formData.relationship,
-        dateOfBirth: formData.dateOfBirth || null,
-        email: formData.email.trim() || null,
-        phoneNumber: formData.phoneNumber.trim() || null,
-        // ✅ CRITICAL FIX: Send BOTH role fields backend might expect
-        role: formData.role,
-        accountType: formData.role,  // Some backends use this
-        isSubAccount: formData.role === 'SUB_ACCOUNT',
+        name: formData.name.trim(), relationship: formData.relationship,
+        dateOfBirth: formData.dateOfBirth || null, email: formData.email.trim() || null,
+        phoneNumber: formData.phoneNumber.trim() || null, role: formData.role,
+        accountType: formData.role, isSubAccount: formData.role === 'SUB_ACCOUNT',
       };
-
       if (formData.role === 'SUB_ACCOUNT') {
         payload.username = formData.username.trim();
-        // Only send password if user entered one
-        if (formData.password && formData.password.trim()) {
-          payload.password = formData.password;
-        }
+        if (formData.password?.trim()) payload.password = formData.password;
       }
-
       let response;
       if (editingMember) {
         response = await api.put(`/family-members/${editingMember.id}`, payload);
-
-        if (response.data.success) {
-          toast.success('Family member updated successfully!');
-          handleCloseDialog();
-          // ✅ FIX: Force full reload to get fresh data from backend
-          await loadMembers();
-        } else {
-          toast.error(response.data.message || 'Failed to update family member');
-        }
+        if (response.data.success) { toast.success('Updated!'); handleCloseDialog(); await loadMembers(); }
+        else toast.error(response.data.message || 'Failed to update');
       } else {
         response = await api.post('/family-members', payload);
-
-        if (response.data.success) {
-          toast.success('Family member added successfully!');
-          handleCloseDialog();
-          await loadMembers();
-        } else {
-          toast.error(response.data.message || 'Failed to add family member');
-        }
+        if (response.data.success) { toast.success('Added!'); handleCloseDialog(); await loadMembers(); }
+        else toast.error(response.data.message || 'Failed to add');
       }
     } catch (error) {
-      console.error('Failed to save family member:', error);
-      const message = error.response?.data?.message || 'Failed to save family member';
-      toast.error(message);
-    } finally {
-      setSubmitting(false);
-    }
+      toast.error(error.response?.data?.message || 'Failed to save');
+    } finally { setSubmitting(false); }
   };
 
   const handleDelete = async (memberId) => {
-    if (!window.confirm('Are you sure you want to delete this family member?')) {
-      return;
-    }
-
+    if (!window.confirm('Are you sure you want to delete this family member?')) return;
     try {
       await api.delete(`/family-members/${memberId}`);
-      toast.success('Family member deleted successfully!');
+      toast.success('Deleted!');
       loadMembers();
-    } catch (error) {
-      console.error('Failed to delete family member:', error);
-      toast.error('Failed to delete family member');
-    }
+    } catch { toast.error('Failed to delete'); }
   };
 
-  const getRoleColor = (role) => {
-    switch (role) {
-      case 'PRIMARY_ACCOUNT':
-        return 'primary';
-      case 'SUB_ACCOUNT':
-        return 'secondary';
-      case 'PROFILE_ONLY':
-        return 'default';
-      default:
-        return 'default';
-    }
-  };
-
-  const getRoleLabel = (role) => {
-    switch (role) {
-      case 'PRIMARY_ACCOUNT':
-        return 'Primary Account';
-      case 'SUB_ACCOUNT':
-        return 'Can Login';
-      case 'PROFILE_ONLY':
-        return 'Profile Only';
-      default:
-        return role;
-    }
-  };
-
-  const getMemberRole = (member) => deriveRole(member);
+  const sf = (key) => (e) => setFormData({ ...formData, [key]: e.target.value });
 
   if (loading) {
     return (
-      <Container maxWidth="lg" sx={{ mt: 4 }}>
+      <Container maxWidth="lg">
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
-          <CircularProgress size={60} />
+          <CircularProgress sx={{ color: '#6366F1' }} />
         </Box>
       </Container>
     );
   }
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
+    <Container maxWidth="lg" sx={{ animation: 'fadeUp 0.35s ease both' }}>
       {/* Header */}
-      <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box sx={{ mb: 3, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
         <Box>
-          <Typography variant="h4" gutterBottom fontWeight={600}>
+          <Typography sx={{ fontFamily: "'DM Serif Display', serif", fontSize: { xs: '1.75rem', sm: '2.25rem' },
+            fontWeight: 400, color: '#0F172A', letterSpacing: '-0.02em', lineHeight: 1.2, mb: 0.25 }}>
             Family Members
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Manage your family members and their access to documents
+          <Typography sx={{ color: '#64748B', fontSize: '0.9rem' }}>
+            Manage your family members and their document access
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<Add />}
-          onClick={() => handleOpenDialog()}
-          size="large"
-        >
-          Add Family Member
+        <Button variant="contained" startIcon={<Add sx={{ fontSize: 16 }} />} onClick={() => handleOpenDialog()}
+          sx={{ borderRadius: '10px', px: 2.5, py: 1.1, fontWeight: 600,
+            background: 'linear-gradient(135deg, #6366F1, #4F46E5)',
+            '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)', transform: 'translateY(-1px)', boxShadow: '0 6px 16px rgba(99,102,241,0.35)' } }}>
+          Add Member
         </Button>
       </Box>
 
-      {/* Info Alert */}
-      <Alert severity="info" sx={{ mb: 3 }}>
-        <Typography variant="body2">
-          <strong>Profile Only:</strong> Members without login access - their info is stored for document organization only.
-          <br />
-          <strong>Sub Account:</strong> Members who can login and view documents shared with them.
-        </Typography>
+      {/* Info */}
+      <Alert severity="info" sx={{ mb: 3, borderRadius: '10px', fontSize: '0.85rem' }}>
+        <strong>Profile Only:</strong> Stored for document organization — cannot login. &nbsp;
+        <strong>Sub Account:</strong> Can login and view documents shared with them.
       </Alert>
 
-      {/* Members Grid */}
+      {/* Grid */}
       {members.length === 0 ? (
-        <Card>
-          <CardContent sx={{ textAlign: 'center', py: 8 }}>
-            <SupervisorAccount sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-            <Typography variant="h6" gutterBottom>
-              No Family Members
-            </Typography>
-            <Typography variant="body2" color="text.secondary" paragraph>
-              Add family members to organize and share documents with them
-            </Typography>
-            <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
-              Add First Member
-            </Button>
-          </CardContent>
-        </Card>
+        <Box sx={{ textAlign: 'center', py: 10, border: '2px dashed #E2E8F0', borderRadius: '16px', background: '#FAFBFC' }}>
+          <Box sx={{ width: 72, height: 72, borderRadius: '20px', background: 'rgba(99,102,241,0.08)', mx: 'auto', mb: 2,
+            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <SupervisorAccount sx={{ fontSize: 32, color: '#6366F1' }} />
+          </Box>
+          <Typography sx={{ fontWeight: 700, fontSize: '1.1rem', color: '#0F172A', mb: 0.5 }}>No Family Members</Typography>
+          <Typography sx={{ fontSize: '0.875rem', color: '#94A3B8', mb: 3, maxWidth: 340, mx: 'auto' }}>
+            Add family members to organize and share documents with them
+          </Typography>
+          <Button variant="contained" startIcon={<Add sx={{ fontSize: 16 }} />} onClick={() => handleOpenDialog()}
+            sx={{ borderRadius: '10px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)' }}>
+            Add First Member
+          </Button>
+        </Box>
       ) : (
-        <Grid container spacing={3}>
-          {members.map((member) => {
-            const memberRole = getMemberRole(member);
-            return (
-              <Grid item xs={12} sm={6} md={4} key={member.id}>
-                <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                  {/* Three-dot menu */}
-                  <IconButton
-                    sx={{ position: 'absolute', top: 8, right: 8 }}
-                    onClick={(e) => handleMenuOpen(e, member)}
-                  >
-                    <MoreVert />
-                  </IconButton>
-
-                  <CardContent sx={{ flex: 1, pt: 6 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 2 }}>
-                      <Avatar sx={{ width: 56, height: 56, mr: 2, bgcolor: 'primary.main' }}>
-                        {member.name.charAt(0).toUpperCase()}
-                      </Avatar>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="h6" gutterBottom>
-                          {member.name}
-                        </Typography>
-                        <Chip
-                          label={member.relationship}
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                        />
-                      </Box>
-                    </Box>
-
-                    <Divider sx={{ my: 2 }} />
-
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Badge fontSize="small" color="action" />
-                        <Chip
-                          label={getRoleLabel(memberRole)}
-                          size="small"
-                          color={getRoleColor(memberRole)}
-                          icon={memberRole === 'SUB_ACCOUNT' ? <LockOpen fontSize="small" /> : <Lock fontSize="small" />}
-                        />
-                      </Box>
-
-                      {member.email ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Email fontSize="small" color="action" />
-                          <Typography variant="body2" color="text.secondary">
-                            {member.email}
-                          </Typography>
-                        </Box>
-                      ) : (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Email fontSize="small" color="action" />
-                          <Typography variant="body2" color="text.secondary">
-                            No email
-                          </Typography>
-                        </Box>
-                      )}
-
-                      {member.phoneNumber && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Phone fontSize="small" color="action" />
-                          <Typography variant="body2" color="text.secondary">
-                            {member.phoneNumber}
-                          </Typography>
-                        </Box>
-                      )}
-
-                      {member.dateOfBirth && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Cake fontSize="small" color="action" />
-                          <Typography variant="body2" color="text.secondary">
-                            {new Date(member.dateOfBirth).toLocaleDateString('en-IN')}
-                          </Typography>
-                        </Box>
-                      )}
-
-                      {member.username && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Person fontSize="small" color="action" />
-                          <Typography variant="body2" color="text.secondary">
-                            @{member.username}
-                          </Typography>
-                        </Box>
-                      )}
-                    </Box>
-                  </CardContent>
-
-                  <Box sx={{ p: 2, pt: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="caption" color="text.secondary">
-                      Added: {member.createdAt ? new Date(member.createdAt).toLocaleDateString('en-IN') : 'N/A'}
-                    </Typography>
-                    {memberRole === 'SUB_ACCOUNT' && (
-                      <Chip label="Active" size="small" color="success" />
-                    )}
-                  </Box>
-                </Card>
-              </Grid>
-            );
-          })}
+        <Grid container spacing={2.5}>
+          {members.map((member) => (
+            <Grid item xs={12} sm={6} md={4} key={member.id}>
+              <MemberCard member={member} role={deriveRole(member)} onMenuOpen={handleMenuOpen} />
+            </Grid>
+          ))}
         </Grid>
       )}
 
       {/* Context Menu */}
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={handleMenuClose}
-      >
-        <MenuItem onClick={handleEditClick}>
-          <ListItemIcon>
-            <Edit fontSize="small" />
-          </ListItemIcon>
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}
+        PaperProps={{ elevation: 3, sx: { borderRadius: '12px', border: '1px solid #E2E8F0', minWidth: 180 } }}>
+        <MenuItem onClick={handleEditClick} sx={{ fontSize: '0.875rem', gap: 1.5, borderRadius: '6px', mx: 0.5 }}>
+          <ListItemIcon sx={{ minWidth: 'unset' }}><Edit sx={{ fontSize: 16, color: '#6366F1' }} /></ListItemIcon>
           <ListItemText>Edit Details</ListItemText>
         </MenuItem>
-        <MenuItem onClick={handleManagePermissionsClick}>
-          <ListItemIcon>
-            <Security fontSize="small" />
-          </ListItemIcon>
+        <MenuItem onClick={handleManagePermissionsClick} sx={{ fontSize: '0.875rem', gap: 1.5, borderRadius: '6px', mx: 0.5 }}>
+          <ListItemIcon sx={{ minWidth: 'unset' }}><Security sx={{ fontSize: 16, color: '#10B981' }} /></ListItemIcon>
           <ListItemText>Manage Permissions</ListItemText>
         </MenuItem>
-        <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
-          <ListItemIcon>
-            <Delete fontSize="small" color="error" />
-          </ListItemIcon>
+        <Divider sx={{ my: 0.5 }} />
+        <MenuItem onClick={handleDeleteClick} sx={{ fontSize: '0.875rem', gap: 1.5, color: '#EF4444', borderRadius: '6px', mx: 0.5, mb: 0.5 }}>
+          <ListItemIcon sx={{ minWidth: 'unset' }}><Delete sx={{ fontSize: 16, color: '#EF4444' }} /></ListItemIcon>
           <ListItemText>Remove Member</ListItemText>
         </MenuItem>
       </Menu>
 
       {/* Add/Edit Dialog */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>
+      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth
+        PaperProps={{ sx: { borderRadius: '16px', p: 0.5 } }}>
+        <DialogTitle sx={{ pt: 3, px: 3, fontWeight: 700 }}>
           {editingMember ? 'Edit Family Member' : 'Add Family Member'}
         </DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2 }}>
-            {/* Name */}
-            <TextField
-              label="Full Name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              error={!!formErrors.name}
-              helperText={formErrors.name}
-              fullWidth
-              required
-            />
-
-            {/* Relationship */}
+        <DialogContent sx={{ px: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 1.5 }}>
+            <TextField label="Full Name" value={formData.name} onChange={sf('name')}
+              error={!!formErrors.name} helperText={formErrors.name} fullWidth required />
             <FormControl fullWidth required error={!!formErrors.relationship}>
               <InputLabel>Relationship</InputLabel>
-              <Select
-                value={formData.relationship}
-                onChange={(e) => setFormData({ ...formData, relationship: e.target.value })}
-                label="Relationship"
-              >
-                {relationships.map((rel) => (
-                  <MenuItem key={rel} value={rel}>
-                    {rel}
-                  </MenuItem>
-                ))}
+              <Select value={formData.relationship} onChange={sf('relationship')} label="Relationship">
+                {RELATIONSHIPS.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
               </Select>
-              {formErrors.relationship && (
-                <FormHelperText>{formErrors.relationship}</FormHelperText>
-              )}
+              {formErrors.relationship && <FormHelperText>{formErrors.relationship}</FormHelperText>}
             </FormControl>
-
-            {/* Date of Birth */}
-            <TextField
-              label="Date of Birth"
-              type="date"
-              value={formData.dateOfBirth}
-              onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-              InputLabelProps={{ shrink: true }}
-              fullWidth
-            />
-
-            {/* Role */}
+            <TextField label="Date of Birth" type="date" value={formData.dateOfBirth}
+              onChange={sf('dateOfBirth')} InputLabelProps={{ shrink: true }} fullWidth />
             <FormControl fullWidth required>
               <InputLabel>Account Type</InputLabel>
-              <Select
-                value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                label="Account Type"
-              >
-                {roles.map((role) => (
-                  <MenuItem key={role.value} value={role.value}>
+              <Select value={formData.role} onChange={sf('role')} label="Account Type">
+                {ROLES.map((r) => (
+                  <MenuItem key={r.value} value={r.value}>
                     <Box>
-                      <Typography variant="body1">{role.label}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {role.description}
-                      </Typography>
+                      <Typography sx={{ fontSize: '0.9rem', fontWeight: 500 }}>{r.label}</Typography>
+                      <Typography sx={{ fontSize: '0.75rem', color: '#94A3B8' }}>{r.description}</Typography>
                     </Box>
                   </MenuItem>
                 ))}
               </Select>
             </FormControl>
 
-            {/* Sub Account Fields */}
             {formData.role === 'SUB_ACCOUNT' && (
               <>
-                <Alert severity="info">
+                <Alert severity="info" sx={{ borderRadius: '10px', fontSize: '0.85rem' }}>
                   Sub accounts can login and view documents shared with them
                 </Alert>
-
-                <TextField
-                  label="Username"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  error={!!formErrors.username}
-                  helperText={formErrors.username || 'Used for login'}
-                  fullWidth
-                  required
-                />
-
-                <TextField
-                  label="Password"
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                <TextField label="Username" value={formData.username} onChange={sf('username')}
+                  error={!!formErrors.username} helperText={formErrors.username || 'Used for login'} fullWidth required />
+                <TextField label="Password" type="password" value={formData.password} onChange={sf('password')}
                   error={!!formErrors.password}
-                  helperText={
-                    formErrors.password ||
-                    (editingMember ? 'Leave blank to keep current password' : 'Minimum 6 characters')
-                  }
-                  fullWidth
-                  required={!editingMember}
-                />
+                  helperText={formErrors.password || (editingMember ? 'Leave blank to keep current' : 'Min. 6 characters')}
+                  fullWidth required={!editingMember} />
               </>
             )}
 
-            <Divider />
-
-            {/* Contact Info */}
-            <Typography variant="subtitle2" color="text.secondary">
-              Contact Information (Optional)
+            <Divider sx={{ my: 0.5 }} />
+            <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Contact (Optional)
             </Typography>
-
-            <TextField
-              label="Email"
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              error={!!formErrors.email}
-              helperText={formErrors.email}
-              fullWidth
-            />
-
-            <TextField
-              label="Phone Number"
-              value={formData.phoneNumber}
-              onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-              error={!!formErrors.phoneNumber}
-              helperText={formErrors.phoneNumber || 'Format: 10 digits'}
-              fullWidth
-            />
+            <TextField label="Email" type="email" value={formData.email} onChange={sf('email')}
+              error={!!formErrors.email} helperText={formErrors.email} fullWidth />
+            <TextField label="Phone Number" value={formData.phoneNumber} onChange={sf('phoneNumber')}
+              error={!!formErrors.phoneNumber} helperText={formErrors.phoneNumber || '10 digits'} fullWidth />
           </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
-          <Button onClick={handleCloseDialog}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleSubmit}
-            disabled={submitting}
-            startIcon={submitting ? <CircularProgress size={20} /> : null}
-          >
-            {editingMember ? 'Update' : 'Add'} Member
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={handleCloseDialog} sx={{ borderRadius: '8px', color: '#64748B', '&:hover': { background: '#F1F5F9' } }}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleSubmit} disabled={submitting}
+            sx={{ borderRadius: '8px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)', '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)' } }}>
+            {submitting ? <CircularProgress size={18} sx={{ color: 'white' }} /> : `${editingMember ? 'Update' : 'Add'} Member`}
           </Button>
         </DialogActions>
       </Dialog>

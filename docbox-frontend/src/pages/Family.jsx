@@ -1,24 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Container,
-  Box,
-  Typography,
-  Button,
-  Grid,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  CircularProgress,
-  TextField,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  Select,
-  FormHelperText,
-  Alert,
-  Divider,
+  Container, Box, Typography, Button, Grid,
+  Dialog, DialogTitle, DialogContent, DialogContentText,
+  DialogActions, CircularProgress, TextField, MenuItem,
+  FormControl, InputLabel, Select, FormHelperText,
+  Alert, Divider,
 } from '@mui/material';
 import { PersonAdd, People } from '@mui/icons-material';
 import { toast } from 'react-toastify';
@@ -27,247 +13,159 @@ import MemberCard from '../components/Family/MemberCard';
 import AddMemberDialog from '../components/Family/AddMemberDialog';
 import api from '../services/api';
 
+const relationships = [
+  'Father','Mother','Spouse','Son','Daughter','Brother','Sister',
+  'Grandfather','Grandmother','Uncle','Aunt','Cousin','Child','Other',
+];
+
+const accountTypes = [
+  { value: 'profile_only', label: 'Profile Only (No Login)',  description: 'Can be linked to documents but cannot login' },
+  { value: 'sub_account',  label: 'Sub Account (Can Login)',  description: 'Can login and view their documents using email' },
+];
+
 const Family = () => {
   const navigate = useNavigate();
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [members, setMembers]                 = useState([]);
+  const [loading, setLoading]                 = useState(true);
+  const [addDialogOpen, setAddDialogOpen]     = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [selectedMember, setSelectedMember] = useState(null);
+  const [editDialogOpen, setEditDialogOpen]   = useState(false);
+  const [selectedMember, setSelectedMember]   = useState(null);
   const [formData, setFormData] = useState({
-    name: '',
-    relationship: '',
-    dateOfBirth: '',
-    email: '',
-    phoneNumber: '',
-    accountType: 'profile_only',
-    password: '',
+    name: '', relationship: '', dateOfBirth: '',
+    email: '', phoneNumber: '', accountType: 'profile_only', password: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
-  const relationships = [
-    'Father',
-    'Mother',
-    'Spouse',
-    'Son',
-    'Daughter',
-    'Brother',
-    'Sister',
-    'Grandfather',
-    'Grandmother',
-    'Uncle',
-    'Aunt',
-    'Cousin',
-    'Child',
-    'Other',
-  ];
-
-  const accountTypes = [
-    { 
-      value: 'profile_only', 
-      label: 'Profile Only (No Login)', 
-      description: 'Can be linked to documents but cannot login' 
-    },
-    { 
-      value: 'sub_account', 
-      label: 'Sub Account (Can Login)', 
-      description: 'Can login and view their documents using email' 
-    },
-  ];
-
-  useEffect(() => {
-    loadMembers();
-  }, []);
+  useEffect(() => { loadMembers(); }, []);
 
   const loadMembers = async () => {
     try {
       setLoading(true);
       const response = await api.get('/family-members');
-      if (response.data.success) {
-        setMembers(response.data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to load family members:', error);
-      toast.error('Failed to load family members');
-    } finally {
-      setLoading(false);
-    }
+      if (response.data.success) setMembers(response.data.data || []);
+    } catch { toast.error('Failed to load family members'); }
+    finally { setLoading(false); }
   };
 
-  // ✅ FIXED: Real edit handler with proper accountType mapping
   const handleEdit = (member) => {
     setSelectedMember(member);
     setFormData({
-      name: member.name || '',
-      relationship: member.relationship || '',
-      dateOfBirth: member.dateOfBirth || '',
-      email: member.user?.email || '',
+      name: member.name || '', relationship: member.relationship || '',
+      dateOfBirth: member.dateOfBirth || '', email: member.user?.email || '',
       phoneNumber: member.user?.phoneNumber || '',
-      accountType: member.accountType || 'profile_only',
-      password: '',
+      accountType: member.accountType || 'profile_only', password: '',
     });
     setFormErrors({});
     setEditDialogOpen(true);
   };
 
-  const handleDeleteClick = (member) => {
-    setSelectedMember(member);
-    setDeleteDialogOpen(true);
-  };
+  const handleDeleteClick = (member) => { setSelectedMember(member); setDeleteDialogOpen(true); };
 
   const handleDeleteConfirm = async () => {
-    if (!selectedMember) return;
-
     try {
-      const response = await api.delete(`/family-members/${selectedMember.id}`);
-      if (response.data.success) {
-        toast.success('Family member removed successfully');
-        setDeleteDialogOpen(false);
-        setSelectedMember(null);
-        loadMembers();
-      } else {
-        toast.error(response.data.message || 'Failed to remove member');
-      }
+      await api.delete(`/family-members/${selectedMember.id}`);
+      toast.success('Family member removed');
+      setDeleteDialogOpen(false);
+      setSelectedMember(null);
+      loadMembers();
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to remove member');
+      toast.error(error.response?.data?.message || 'Failed to remove');
     }
   };
 
-  // ✅ FIXED: Real permissions handler
-  const handleManagePermissions = (member) => {
-    navigate(`/permissions?member=${member.id}`);
-  };
+  const handleManagePermissions = (member) => { navigate(`/permissions?member=${member.id}`); };
 
   const validateForm = () => {
     const errors = {};
-
-    if (!formData.name.trim()) {
-      errors.name = 'Name is required';
-    }
-
-    if (!formData.relationship) {
-      errors.relationship = 'Relationship is required';
-    }
-
-    // ✅ UPDATED: Validation for sub_account
+    if (!formData.name.trim()) errors.name = 'Name is required';
+    if (!formData.relationship) errors.relationship = 'Relationship is required';
     if (formData.accountType === 'sub_account') {
-      if (!formData.email.trim()) {
-        errors.email = 'Email is required for sub accounts';
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-        errors.email = 'Invalid email format';
-      }
-      
-      if (!selectedMember && !formData.password) {
-        errors.password = 'Password is required for new sub accounts';
-      }
-      if (formData.password && formData.password.length < 6) {
-        errors.password = 'Password must be at least 6 characters';
-      }
+      if (!formData.email.trim()) errors.email = 'Email is required for sub accounts';
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) errors.email = 'Invalid email format';
+      if (!selectedMember && !formData.password) errors.password = 'Password is required for new sub accounts';
+      if (formData.password && formData.password.length < 6) errors.password = 'Minimum 6 characters';
     }
-
-    if (formData.email && formData.accountType !== 'sub_account' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+    if (formData.email && formData.accountType !== 'sub_account' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email))
       errors.email = 'Invalid email format';
-    }
-
-    if (formData.phoneNumber && !/^\d{10}$/.test(formData.phoneNumber.replace(/\D/g, ''))) {
-      errors.phoneNumber = 'Phone number must be 10 digits';
-    }
-
+    if (formData.phoneNumber && !/^\d{10}$/.test(formData.phoneNumber.replace(/\D/g, '')))
+      errors.phoneNumber = 'Phone must be 10 digits';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
   const handleEditSubmit = async () => {
-    if (!validateForm()) {
-      toast.error('Please fix the errors in the form');
-      return;
-    }
-
+    if (!validateForm()) { toast.error('Please fix the errors'); return; }
     try {
       setSubmitting(true);
-
-      // ✅ UPDATED: Payload structure matching backend
       const payload = {
-        name: formData.name.trim(),
-        relationship: formData.relationship,
-        dateOfBirth: formData.dateOfBirth || null,
-        accountType: formData.accountType,
+        name: formData.name.trim(), relationship: formData.relationship,
+        dateOfBirth: formData.dateOfBirth || null, accountType: formData.accountType,
       };
-
-      // ✅ Only include email/phone/password for sub_account
       if (formData.accountType === 'sub_account') {
         payload.email = formData.email.trim();
         payload.phoneNumber = formData.phoneNumber.trim() || null;
-        if (formData.password) {
-          payload.password = formData.password;
-        }
+        if (formData.password) payload.password = formData.password;
       }
-
       const response = await api.put(`/family-members/${selectedMember.id}`, payload);
-      
       if (response.data.success) {
-        toast.success('Family member updated successfully!');
+        toast.success('Family member updated!');
         setEditDialogOpen(false);
         setSelectedMember(null);
-        setFormData({
-          name: '',
-          relationship: '',
-          dateOfBirth: '',
-          email: '',
-          phoneNumber: '',
-          accountType: 'profile_only',
-          password: '',
-        });
+        setFormData({ name:'',relationship:'',dateOfBirth:'',email:'',phoneNumber:'',accountType:'profile_only',password:'' });
         loadMembers();
       }
     } catch (error) {
-      console.error('Failed to update family member:', error);
-      const message = error.response?.data?.message || 'Failed to update family member';
-      toast.error(message);
-    } finally {
-      setSubmitting(false);
-    }
+      toast.error(error.response?.data?.message || 'Failed to update');
+    } finally { setSubmitting(false); }
   };
+
+  const setField = (key) => (e) => setFormData({ ...formData, [key]: e.target.value });
 
   if (loading) {
     return (
       <Container maxWidth="lg">
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
-          <CircularProgress size={60} />
+          <CircularProgress sx={{ color: '#6366F1' }} />
         </Box>
       </Container>
     );
   }
 
   return (
-    <Container maxWidth="lg">
+    <Container maxWidth="lg" sx={{ animation: 'fadeUp 0.35s ease both' }}>
       {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight="bold">
-          Family Members
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Manage family members and their document access
-        </Typography>
-      </Box>
-
-      {/* Add Member Button */}
-      <Box sx={{ mb: 3 }}>
+      <Box sx={{ mb: 3, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+        <Box>
+          <Typography sx={{
+            fontFamily: "'DM Serif Display', serif",
+            fontSize: { xs: '1.75rem', sm: '2.25rem' },
+            fontWeight: 400, color: '#0F172A', letterSpacing: '-0.02em', lineHeight: 1.2, mb: 0.25,
+          }}>
+            Family
+          </Typography>
+          <Typography sx={{ color: '#64748B', fontSize: '0.9rem' }}>
+            Manage family members and their document access
+          </Typography>
+        </Box>
         <Button
           variant="contained"
-          startIcon={<PersonAdd />}
+          startIcon={<PersonAdd sx={{ fontSize: 16 }} />}
           onClick={() => setAddDialogOpen(true)}
-          size="large"
+          sx={{
+            borderRadius: '10px', px: 2.5, py: 1.1, fontWeight: 600,
+            background: 'linear-gradient(135deg, #6366F1, #4F46E5)',
+            '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)', transform: 'translateY(-1px)', boxShadow: '0 6px 16px rgba(99,102,241,0.35)' },
+          }}
         >
-          Add Family Member
+          Add Member
         </Button>
       </Box>
 
       {/* Members Grid */}
       {members.length > 0 ? (
-        <Grid container spacing={3}>
+        <Grid container spacing={2.5}>
           {members.map((member) => (
             <Grid item xs={12} sm={6} md={4} key={member.id}>
               <MemberCard
@@ -280,27 +178,32 @@ const Family = () => {
           ))}
         </Grid>
       ) : (
-        <Box
-          sx={{
-            textAlign: 'center',
-            py: 8,
-            border: 2,
-            borderStyle: 'dashed',
-            borderColor: 'divider',
-            borderRadius: 2,
-          }}
-        >
-          <People sx={{ fontSize: 80, color: 'text.disabled', mb: 2 }} />
-          <Typography variant="h6" color="text.secondary" gutterBottom>
+        <Box sx={{
+          textAlign: 'center', py: 10,
+          border: '2px dashed #E2E8F0', borderRadius: '16px',
+          background: '#FAFBFC',
+        }}>
+          <Box sx={{
+            width: 72, height: 72, borderRadius: '20px',
+            background: 'rgba(99,102,241,0.08)', mx: 'auto', mb: 2,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <People sx={{ fontSize: 32, color: '#6366F1' }} />
+          </Box>
+          <Typography sx={{ fontWeight: 700, fontSize: '1.1rem', color: '#0F172A', mb: 0.5 }}>
             No family members yet
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+          <Typography sx={{ fontSize: '0.875rem', color: '#94A3B8', mb: 3, maxWidth: 340, mx: 'auto' }}>
             Add family members to share and manage documents together
           </Typography>
           <Button
-            variant="contained"
-            startIcon={<PersonAdd />}
+            variant="contained" startIcon={<PersonAdd sx={{ fontSize: 16 }} />}
             onClick={() => setAddDialogOpen(true)}
+            sx={{
+              borderRadius: '10px',
+              background: 'linear-gradient(135deg, #6366F1, #4F46E5)',
+              '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)' },
+            }}
           >
             Add Your First Member
           </Button>
@@ -308,177 +211,100 @@ const Family = () => {
       )}
 
       {/* Add Member Dialog */}
-      <AddMemberDialog
-        open={addDialogOpen}
-        onClose={() => setAddDialogOpen(false)}
-        onSuccess={loadMembers}
-      />
+      <AddMemberDialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} onSuccess={loadMembers} />
 
-      {/* Edit Member Dialog */}
-      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Edit Family Member</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2 }}>
-            {/* Name */}
+      {/* Edit Dialog */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth
+        PaperProps={{ sx: { borderRadius: '16px', p: 0.5 } }}>
+        <DialogTitle sx={{ pt: 3, px: 3, fontWeight: 700 }}>Edit Family Member</DialogTitle>
+        <DialogContent sx={{ px: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 1.5 }}>
             <TextField
-              label="Full Name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              error={!!formErrors.name}
-              helperText={formErrors.name}
-              fullWidth
-              required
+              label="Full Name" value={formData.name} onChange={setField('name')}
+              error={!!formErrors.name} helperText={formErrors.name} fullWidth required
             />
-
-            {/* Relationship */}
             <FormControl fullWidth required error={!!formErrors.relationship}>
               <InputLabel>Relationship</InputLabel>
-              <Select
-                value={formData.relationship}
-                onChange={(e) => setFormData({ ...formData, relationship: e.target.value })}
-                label="Relationship"
-              >
-                {relationships.map((rel) => (
-                  <MenuItem key={rel} value={rel}>
-                    {rel}
-                  </MenuItem>
-                ))}
+              <Select value={formData.relationship} onChange={setField('relationship')} label="Relationship">
+                {relationships.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
               </Select>
-              {formErrors.relationship && (
-                <FormHelperText>{formErrors.relationship}</FormHelperText>
-              )}
+              {formErrors.relationship && <FormHelperText>{formErrors.relationship}</FormHelperText>}
             </FormControl>
-
-            {/* Date of Birth */}
             <TextField
-              label="Date of Birth"
-              type="date"
-              value={formData.dateOfBirth}
-              onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-              InputLabelProps={{ shrink: true }}
-              fullWidth
+              label="Date of Birth" type="date" value={formData.dateOfBirth}
+              onChange={setField('dateOfBirth')} InputLabelProps={{ shrink: true }} fullWidth
             />
-
-            {/* Account Type - UPDATED */}
             <FormControl fullWidth required>
               <InputLabel>Account Type</InputLabel>
-              <Select
-                value={formData.accountType}
-                onChange={(e) => setFormData({ ...formData, accountType: e.target.value })}
-                label="Account Type"
-              >
-                {accountTypes.map((type) => (
-                  <MenuItem key={type.value} value={type.value}>
+              <Select value={formData.accountType} onChange={setField('accountType')} label="Account Type">
+                {accountTypes.map((t) => (
+                  <MenuItem key={t.value} value={t.value}>
                     <Box>
-                      <Typography variant="body1">{type.label}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {type.description}
-                      </Typography>
+                      <Typography sx={{ fontSize: '0.9rem', fontWeight: 500 }}>{t.label}</Typography>
+                      <Typography sx={{ fontSize: '0.75rem', color: '#94A3B8' }}>{t.description}</Typography>
                     </Box>
                   </MenuItem>
                 ))}
               </Select>
-              <FormHelperText>
-                Choose whether this person can login or just have a profile
-              </FormHelperText>
+              <FormHelperText>Choose whether this person can login or just have a profile</FormHelperText>
             </FormControl>
 
-            {/* Sub Account Fields - UPDATED */}
             {formData.accountType === 'sub_account' && (
               <>
-                <Alert severity="info">
-                  Sub accounts can login using their email and view documents shared with them
+                <Alert severity="info" sx={{ borderRadius: '10px', fontSize: '0.85rem' }}>
+                  Sub accounts can login using their email and view shared documents
                 </Alert>
-
-                <TextField
-                  label="Email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  error={!!formErrors.email}
-                  helperText={formErrors.email || 'Used for login (username will be email)'}
-                  fullWidth
-                  required
-                />
-
-                <TextField
-                  label="Password"
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  error={!!formErrors.password}
-                  helperText={formErrors.password || 'Leave blank to keep current password'}
-                  fullWidth
-                  required={!selectedMember}
-                />
-
-                <TextField
-                  label="Phone Number"
-                  value={formData.phoneNumber}
-                  onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-                  error={!!formErrors.phoneNumber}
-                  helperText={formErrors.phoneNumber || 'Optional - Format: 10 digits'}
-                  fullWidth
-                />
+                <TextField label="Email" type="email" value={formData.email} onChange={setField('email')}
+                  error={!!formErrors.email} helperText={formErrors.email || 'Used for login'} fullWidth required />
+                <TextField label="Password" type="password" value={formData.password} onChange={setField('password')}
+                  error={!!formErrors.password} helperText={formErrors.password || 'Leave blank to keep current'} fullWidth required={!selectedMember} />
+                <TextField label="Phone Number" value={formData.phoneNumber} onChange={setField('phoneNumber')}
+                  error={!!formErrors.phoneNumber} helperText={formErrors.phoneNumber || 'Optional — 10 digits'} fullWidth />
               </>
             )}
 
-            {/* Contact Info for Profile Only - OPTIONAL */}
             {formData.accountType === 'profile_only' && (
               <>
-                <Divider />
-
-                <Typography variant="subtitle2" color="text.secondary">
-                  Contact Information (Optional)
+                <Divider sx={{ my: 0.5 }} />
+                <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Contact Info (Optional)
                 </Typography>
-
-                <TextField
-                  label="Email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  error={!!formErrors.email}
-                  helperText={formErrors.email}
-                  fullWidth
-                />
-
-                <TextField
-                  label="Phone Number"
-                  value={formData.phoneNumber}
-                  onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-                  error={!!formErrors.phoneNumber}
-                  helperText={formErrors.phoneNumber || 'Format: 10 digits'}
-                  fullWidth
-                />
+                <TextField label="Email" type="email" value={formData.email} onChange={setField('email')}
+                  error={!!formErrors.email} helperText={formErrors.email} fullWidth />
+                <TextField label="Phone Number" value={formData.phoneNumber} onChange={setField('phoneNumber')}
+                  error={!!formErrors.phoneNumber} helperText={formErrors.phoneNumber || '10 digits'} fullWidth />
               </>
             )}
           </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
-          <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleEditSubmit}
-            disabled={submitting}
-            startIcon={submitting ? <CircularProgress size={20} /> : null}
-          >
-            Update Member
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={() => setEditDialogOpen(false)}
+            sx={{ borderRadius: '8px', color: '#64748B', '&:hover': { background: '#F1F5F9' } }}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleEditSubmit} disabled={submitting}
+            sx={{ borderRadius: '8px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)', '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)' } }}>
+            {submitting ? <CircularProgress size={18} sx={{ color: 'white' }} /> : 'Update Member'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>Remove Family Member?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to remove {selectedMember?.name}? They will lose access to
-            shared documents.
+      {/* Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}
+        PaperProps={{ sx: { borderRadius: '16px', p: 0.5 } }}>
+        <DialogTitle sx={{ pt: 3, px: 3, fontWeight: 700 }}>Remove Family Member?</DialogTitle>
+        <DialogContent sx={{ px: 3 }}>
+          <DialogContentText sx={{ color: '#475569', fontSize: '0.9rem' }}>
+            Are you sure you want to remove <strong style={{ color: '#0F172A' }}>{selectedMember?.name}</strong>? They will lose access to shared documents.
           </DialogContentText>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleDeleteConfirm} color="error" variant="contained">
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={() => setDeleteDialogOpen(false)}
+            sx={{ borderRadius: '8px', color: '#64748B', '&:hover': { background: '#F1F5F9' } }}>
+            Cancel
+          </Button>
+          <Button onClick={handleDeleteConfirm} color="error" variant="contained"
+            sx={{ borderRadius: '8px', background: '#EF4444', '&:hover': { background: '#DC2626' } }}>
             Remove
           </Button>
         </DialogActions>

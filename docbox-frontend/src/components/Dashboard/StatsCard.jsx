@@ -1,55 +1,50 @@
 import React from 'react';
-import { Card, CardContent, Box, Typography, Avatar } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 import { TrendingUp } from '@mui/icons-material';
 
-const StatsCard = ({ title, value, subtitle, icon: Icon, color = 'primary', trend }) => {
+const StatsCard = ({ title, value, subtitle, icon: Icon, color = '#6366F1', trend }) => {
   return (
-    <Card
-      sx={{
-        height: '100%',
-        transition: 'transform 0.2s, box-shadow 0.2s',
-        '&:hover': {
-          transform: 'translateY(-4px)',
-          boxShadow: 4,
-        },
-      }}
-    >
-      <CardContent>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              {title}
+    <Box sx={{
+      p: 2.5, borderRadius: '14px',
+      border: '1px solid #E2E8F0', background: 'white',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      height: '100%',
+      transition: 'transform 200ms ease, box-shadow 200ms ease',
+      '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 24px rgba(15,23,42,0.08)' },
+    }}>
+      <Box sx={{ flex: 1 }}>
+        <Typography sx={{
+          fontSize: '0.72rem', fontWeight: 600, color: '#94A3B8',
+          textTransform: 'uppercase', letterSpacing: '0.07em', mb: 1,
+        }}>
+          {title}
+        </Typography>
+        <Typography sx={{
+          fontSize: '2rem', fontWeight: 700, color: '#0F172A',
+          letterSpacing: '-0.04em', lineHeight: 1, mb: 0.5,
+        }}>
+          {value}
+        </Typography>
+        {subtitle && (
+          <Typography sx={{ fontSize: '0.78rem', color: '#64748B' }}>{subtitle}</Typography>
+        )}
+        {trend && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+            <TrendingUp sx={{ fontSize: 14, color: '#10B981' }} />
+            <Typography sx={{ fontSize: '0.75rem', color: '#10B981', fontWeight: 600 }}>
+              {trend}
             </Typography>
-            <Typography variant="h4" component="div" fontWeight="bold" sx={{ my: 1 }}>
-              {value}
-            </Typography>
-            {subtitle && (
-              <Typography variant="caption" color="text.secondary">
-                {subtitle}
-              </Typography>
-            )}
-            {trend && (
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                <TrendingUp sx={{ fontSize: 16, color: 'success.main', mr: 0.5 }} />
-                <Typography variant="caption" color="success.main">
-                  {trend}
-                </Typography>
-              </Box>
-            )}
           </Box>
-          <Avatar
-            sx={{
-              bgcolor: `${color}.light`,
-              color: `${color}.main`,
-              width: 56,
-              height: 56,
-            }}
-          >
-            <Icon sx={{ fontSize: 28 }} />
-          </Avatar>
-        </Box>
-      </CardContent>
-    </Card>
+        )}
+      </Box>
+      <Box sx={{
+        width: 44, height: 44, borderRadius: '12px', flexShrink: 0, ml: 1.5,
+        background: `${color}15`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon sx={{ fontSize: 20, color }} />
+      </Box>
+    </Box>
   );
 };
 

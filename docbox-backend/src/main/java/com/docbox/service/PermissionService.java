@@ -129,10 +129,14 @@ public class PermissionService {
     }
 
     /**
-     * Grant permission to a user for a document
+     * Grant permission to a user for a document.
+     *
+     * Returns a plain Map DTO so that all lazy-loaded associations (User, Document)
+     * are accessed while the @Transactional session is still open. Callers must
+     * never unwrap a DocumentPermission entity from this method's result.
      */
     @Transactional
-    public DocumentPermission grantPermission(Long familyMemberId, Long documentId, PermissionLevel level) {
+    public Map<String, Object> grantPermission(Long familyMemberId, Long documentId, PermissionLevel level) {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
         // Get FamilyMember first
@@ -156,22 +160,36 @@ public class PermissionService {
                 .findByDocumentIdAndUserId(documentId, targetUser.getId())
                 .orElse(null);
 
+        DocumentPermission permission;
         if (existing != null) {
             existing.setPermissionLevel(level);
             existing.setUpdatedAt(LocalDateTime.now());
-            return permissionRepository.save(existing);
+            permission = permissionRepository.save(existing);
+        } else {
+            // Create new permission
+            permission = new DocumentPermission();
+            permission.setDocument(document);
+            permission.setUser(targetUser);
+            permission.setPermissionLevel(level);
+            permission.setGrantedBy(currentUser);
+            permission.setGrantedAt(LocalDateTime.now());
+            permission.setUpdatedAt(LocalDateTime.now());
+            permission = permissionRepository.save(permission);
         }
 
-        // Create new permission
-        DocumentPermission permission = new DocumentPermission();
-        permission.setDocument(document);
-        permission.setUser(targetUser);
-        permission.setPermissionLevel(level);
-        permission.setGrantedBy(currentUser);
-        permission.setGrantedAt(LocalDateTime.now());
-        permission.setUpdatedAt(LocalDateTime.now());
-
-        return permissionRepository.save(permission);
+        // Build and return a plain DTO *inside* the transaction so all proxies
+        // are still reachable — this is the fix for LazyInitializationException.
+        Map<String, Object> dto = new HashMap<>();
+        dto.put("id", permission.getId());
+        dto.put("documentId", permission.getDocument().getId());
+        dto.put("documentName", permission.getDocument().getOriginalFilename());
+        dto.put("userId", permission.getUser().getId());
+        dto.put("userEmail", permission.getUser().getEmail());
+        dto.put("userFullName", permission.getUser().getFullName());
+        dto.put("permissionLevel", permission.getPermissionLevel().toString());
+        dto.put("grantedAt", permission.getGrantedAt());
+        dto.put("grantedBy", permission.getGrantedBy() != null ? permission.getGrantedBy().getId() : null);
+        return dto;
     }
 
     /**
@@ -448,17 +466,33 @@ public class PermissionService {
     }
 
     /**
-     * Update document permission level
+     * Update document permission level.
+     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
-    public DocumentPermission updateDocumentPermission(Long permissionId, PermissionLevel newLevel) {
+    public Map<String, Object> updateDocumentPermission(Long permissionId, PermissionLevel newLevel) {
         DocumentPermission permission = permissionRepository.findById(permissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Permission", "id", permissionId));
 
         permission.setPermissionLevel(newLevel);
         permission.setUpdatedAt(LocalDateTime.now());
+        permission = permissionRepository.save(permission);
 
-        return permissionRepository.save(permission);
+        Map<String, Object> dto = new HashMap<>();
+        dto.put("id", permission.getId());
+        dto.put("documentId", permission.getDocument().getId());
+        dto.put("documentName", permission.getDocument().getOriginalFilename());
+        if (permission.getDocument().getCategory() != null) {
+            dto.put("categoryName", permission.getDocument().getCategory().getName());
+        }
+        dto.put("userId", permission.getUser().getId());
+        dto.put("userEmail", permission.getUser().getEmail());
+        dto.put("userFullName", permission.getUser().getFullName());
+        dto.put("permissionLevel", permission.getPermissionLevel().toString());
+        dto.put("grantedAt", permission.getGrantedAt());
+        dto.put("updatedAt", permission.getUpdatedAt());
+        dto.put("grantedBy", permission.getGrantedBy() != null ? permission.getGrantedBy().getId() : null);
+        return dto;
     }
 
     /**
@@ -474,10 +508,97 @@ public class PermissionService {
     }
 
     /**
-     * Grant category permission to family member
+     * Get all document permissions granted BY the current primary-account user.
+     * All association accesses happen inside this @Transactional boundary so
+     * Hibernate proxies are always initialised — no LazyInitializationException.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getGrantedDocumentPermissions() {
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+
+        // Fetch every permission where this user is the grantor OR owns the document.
+        // Using the repository's findAll() is safe here because we are @Transactional —
+        // the session stays open for the full stream.
+        return permissionRepository.findAll().stream()
+                .filter(perm -> {
+                    boolean grantedByMe = perm.getGrantedBy() != null
+                            && currentUserId.equals(perm.getGrantedBy().getId());
+                    boolean myDocument  = perm.getDocument() != null
+                            && perm.getDocument().getUser() != null
+                            && currentUserId.equals(perm.getDocument().getUser().getId());
+                    return grantedByMe || myDocument;
+                })
+                .map(perm -> {
+                    Map<String, Object> dto = new HashMap<>();
+                    dto.put("id", perm.getId());
+                    dto.put("permissionLevel", perm.getPermissionLevel() != null ? perm.getPermissionLevel().toString() : null);
+                    dto.put("grantedAt", perm.getGrantedAt());
+                    dto.put("updatedAt", perm.getUpdatedAt());
+                    if (perm.getDocument() != null) {
+                        dto.put("documentId", perm.getDocument().getId());
+                        dto.put("documentName", perm.getDocument().getOriginalFilename());
+                        if (perm.getDocument().getCategory() != null) {
+                            dto.put("categoryName", perm.getDocument().getCategory().getName());
+                        }
+                    }
+                    if (perm.getUser() != null) {
+                        dto.put("userId", perm.getUser().getId());
+                        dto.put("userEmail", perm.getUser().getEmail());
+                        dto.put("userFullName", perm.getUser().getFullName());
+                    }
+                    if (perm.getGrantedBy() != null) {
+                        dto.put("grantedById", perm.getGrantedBy().getId());
+                    }
+                    return dto;
+                })
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Get all category permissions granted BY the current primary-account user.
+     * All association accesses happen inside this @Transactional boundary.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getGrantedCategoryPermissions() {
+        Long currentUserId = SecurityUtils.getCurrentUserId();
+
+        return categoryPermissionRepository.findAll().stream()
+                .filter(perm -> perm.getPrimaryAccount() != null
+                        && currentUserId.equals(perm.getPrimaryAccount().getId()))
+                .map(perm -> {
+                    Map<String, Object> dto = new HashMap<>();
+                    dto.put("id", perm.getId());
+                    dto.put("createdAt", perm.getCreatedAt());
+                    dto.put("updatedAt", perm.getUpdatedAt());
+                    if (perm.getDefaultPermissionLevel() != null) {
+                        String lvl = perm.getDefaultPermissionLevel().toString();
+                        dto.put("defaultPermissionLevel", lvl);
+                        dto.put("permissionLevel", lvl);
+                    }
+                    if (perm.getCategory() != null) {
+                        dto.put("categoryId", perm.getCategory().getId());
+                        dto.put("categoryName", perm.getCategory().getName());
+                        dto.put("categoryIcon", perm.getCategory().getIcon());
+                    }
+                    if (perm.getUser() != null) {
+                        dto.put("userId", perm.getUser().getId());
+                        dto.put("userEmail", perm.getUser().getEmail());
+                        dto.put("userFullName", perm.getUser().getFullName());
+                    }
+                    if (perm.getPrimaryAccount() != null) {
+                        dto.put("primaryAccountId", perm.getPrimaryAccount().getId());
+                    }
+                    return dto;
+                })
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Grant category permission to family member.
+     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
-    public CategoryPermission grantCategoryPermission(Long categoryId, Long familyMemberId, PermissionLevel level) {
+    public Map<String, Object> grantCategoryPermission(Long categoryId, Long familyMemberId, PermissionLevel level) {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
         // Get FamilyMember first
@@ -505,33 +626,67 @@ public class PermissionService {
         if (existing != null) {
             existing.setDefaultPermissionLevel(level);
             existing.setUpdatedAt(LocalDateTime.now());
-            return categoryPermissionRepository.save(existing);
+            existing = categoryPermissionRepository.save(existing);
+        } else {
+            // Create new permission
+            CategoryPermission permission = new CategoryPermission();
+            permission.setCategory(category);
+            permission.setPrimaryAccount(currentUser);
+            permission.setUser(targetUser);
+            permission.setDefaultPermissionLevel(level);
+            permission.setCreatedBy(currentUser);
+            permission.setUpdatedAt(LocalDateTime.now());
+            existing = categoryPermissionRepository.save(permission);
         }
 
-        // Create new permission
-        CategoryPermission permission = new CategoryPermission();
-        permission.setCategory(category);
-        permission.setPrimaryAccount(currentUser);
-        permission.setUser(targetUser);
-        permission.setDefaultPermissionLevel(level);
-        permission.setCreatedBy(currentUser);
-        permission.setUpdatedAt(LocalDateTime.now());
-
-        return categoryPermissionRepository.save(permission);
+        // Build DTO inside the transaction — safe to access all lazy proxies here
+        Map<String, Object> dto = new HashMap<>();
+        dto.put("id", existing.getId());
+        dto.put("categoryId", existing.getCategory().getId());
+        dto.put("categoryName", existing.getCategory().getName());
+        dto.put("categoryIcon", existing.getCategory().getIcon());
+        dto.put("userId", existing.getUser().getId());
+        dto.put("userEmail", existing.getUser().getEmail());
+        dto.put("userFullName", existing.getUser().getFullName());
+        dto.put("defaultPermissionLevel", existing.getDefaultPermissionLevel().toString());
+        dto.put("permissionLevel", existing.getDefaultPermissionLevel().toString());
+        dto.put("createdAt", existing.getCreatedAt());
+        dto.put("updatedAt", existing.getUpdatedAt());
+        if (existing.getPrimaryAccount() != null) {
+            dto.put("primaryAccountId", existing.getPrimaryAccount().getId());
+        }
+        return dto;
     }
 
     /**
-     * Update category permission level
+     * Update category permission level.
+     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
-    public CategoryPermission updateCategoryPermission(Long permissionId, PermissionLevel newLevel) {
+    public Map<String, Object> updateCategoryPermission(Long permissionId, PermissionLevel newLevel) {
         CategoryPermission permission = categoryPermissionRepository.findById(permissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("CategoryPermission", "id", permissionId));
 
         permission.setDefaultPermissionLevel(newLevel);
         permission.setUpdatedAt(LocalDateTime.now());
+        permission = categoryPermissionRepository.save(permission);
 
-        return categoryPermissionRepository.save(permission);
+        Map<String, Object> dto = new HashMap<>();
+        dto.put("id", permission.getId());
+        dto.put("categoryId", permission.getCategory().getId());
+        dto.put("categoryName", permission.getCategory().getName());
+        dto.put("categoryIcon", permission.getCategory().getIcon());
+        dto.put("userId", permission.getUser().getId());
+        dto.put("userEmail", permission.getUser().getEmail());
+        dto.put("userFullName", permission.getUser().getFullName());
+        dto.put("defaultPermissionLevel", permission.getDefaultPermissionLevel().toString());
+        dto.put("permissionLevel", permission.getDefaultPermissionLevel().toString());
+        dto.put("createdAt", permission.getCreatedAt());
+        dto.put("updatedAt", permission.getUpdatedAt());
+        if (permission.getPrimaryAccount() != null) {
+            dto.put("primaryAccountId", permission.getPrimaryAccount().getId());
+        }
+        return dto;
     }
 
     /**

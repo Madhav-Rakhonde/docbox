@@ -61,6 +61,40 @@ public class DocumentValidationService {
             "date:", "ref no", "reference", "serial no"
     );
 
+    /**
+     * FAST validation — no OCR, no text extraction.
+     * Used when the user has already selected a category so we skip the slow
+     * Tesseract passes. Only checks size, extension, and MIME type.
+     */
+    public ValidationResult validateFileQuick(MultipartFile file) {
+        ValidationResult result = new ValidationResult();
+        try {
+            if (file.isEmpty()) { result.setValid(false); result.setReason("File is empty"); return result; }
+            if (file.getSize() > maxFileSize) { result.setValid(false); result.setReason("File size exceeds limit"); return result; }
+
+            String filename = file.getOriginalFilename();
+            if (filename == null || filename.isEmpty()) { result.setValid(false); result.setReason("Invalid filename"); return result; }
+
+            String extension = getFileExtension(filename).toLowerCase();
+            List<String> allowed = Arrays.asList(allowedExtensions.split(","));
+            if (!allowed.contains(extension)) { result.setValid(false); result.setReason("File type not allowed"); return result; }
+
+            byte[] fileBytes = file.getBytes();
+            String mimeType = tika.detect(fileBytes, filename);
+            result.setMimeType(mimeType);
+            result.setFileType(extension.toUpperCase());
+            result.setValid(true);
+            result.setReason("Quick validation passed");
+            logger.info("Quick validation OK: {} ({})", filename, mimeType);
+            return result;
+        } catch (Exception ex) {
+            logger.error("Quick validation failed", ex);
+            result.setValid(false);
+            result.setReason("Validation error");
+            return result;
+        }
+    }
+
     public ValidationResult validateFile(MultipartFile file) {
         ValidationResult result = new ValidationResult();
 

@@ -6,6 +6,7 @@ import com.docbox.entity.FamilyMember;
 import com.docbox.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -19,19 +20,26 @@ import java.util.Optional;
 public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     // ========================================
-    // BASIC QUERIES
+    // BASIC QUERIES — @EntityGraph eagerly loads category/familyMember/user
+    // so controllers never hit LazyInitializationException
     // ========================================
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUser(User user);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUser(User user, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndCategory(User user, DocumentCategory category);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUserAndCategory(User user, DocumentCategory category, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndFamilyMember(User user, FamilyMember familyMember);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUserAndFamilyMember(User user, FamilyMember familyMember, Pageable pageable);
 
     Optional<Document> findByStoredFilename(String storedFilename);
@@ -40,15 +48,20 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     // ARCHIVED QUERIES
     // ========================================
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndIsArchivedFalse(User user);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUserAndIsArchivedFalse(User user, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndIsArchivedTrue(User user);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUserAndIsArchivedTrue(User user, Pageable pageable);
 
-    @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND d.isArchived = true ORDER BY d.updatedAt DESC")
     List<Document> findArchivedDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
@@ -56,11 +69,14 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     // FAVORITE QUERIES
     // ========================================
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndIsFavoriteTrue(User user);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByUserAndIsFavoriteTrue(User user, Pageable pageable);
 
-    @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND d.isFavorite = true ORDER BY d.updatedAt DESC")
     List<Document> findFavoriteDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
@@ -68,41 +84,41 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     // CATEGORY QUERIES
     // ========================================
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByCategoryAndUser(DocumentCategory category, User user);
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     Page<Document> findByCategoryAndUser(DocumentCategory category, User user, Pageable pageable);
 
-    @Query("SELECT d FROM Document d WHERE d.category = :category " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.category = :category " +
             "AND (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "ORDER BY d.createdAt DESC")
     List<Document> findByCategoryAndPrimaryAccount(@Param("category") DocumentCategory category,
                                                    @Param("userId") Long userId);
 
-    /**
-     * ✅ Used by DocumentService.deleteCategory() to block deletion when documents exist
-     */
     long countByCategory(DocumentCategory category);
 
     // ========================================
     // EXPIRY QUERIES
     // ========================================
 
-    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND d.expiryDate IS NOT NULL AND d.expiryDate < :date AND d.isArchived = false")
     List<Document> findExpiredDocuments(@Param("userId") Long userId, @Param("date") LocalDate date);
 
-    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND d.expiryDate IS NOT NULL AND d.expiryDate BETWEEN :startDate AND :endDate AND d.isArchived = false")
     List<Document> findDocumentsExpiringBetween(@Param("userId") Long userId,
                                                 @Param("startDate") LocalDate startDate,
                                                 @Param("endDate") LocalDate endDate);
 
-    /**
-     * ✅ Used by DocumentService.getExpiringDocuments() — sorted soonest-first
-     */
-    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND d.expiryDate IS NOT NULL AND d.expiryDate BETWEEN :startDate AND :endDate " +
             "AND d.isArchived = false ORDER BY d.expiryDate ASC")
@@ -114,7 +130,6 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     // SEARCH QUERIES
     // ========================================
 
-    // Paginated — primary account scope
     @Query("SELECT d FROM Document d WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
@@ -125,10 +140,8 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
                                    @Param("searchTerm") String searchTerm,
                                    Pageable pageable);
 
-    /**
-     * ✅ Non-paginated — used by DocumentService.searchDocuments(String)
-     */
-    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
             "OR LOWER(d.documentNumber) LIKE LOWER(CONCAT('%', :searchTerm, '%')) " +
@@ -137,16 +150,16 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     List<Document> searchDocuments(@Param("userId") Long userId,
                                    @Param("searchTerm") String searchTerm);
 
-    // Search scoped to a single user (no sub-accounts)
-    @Query("SELECT d FROM Document d WHERE d.user = :user " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user = :user " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.notes) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.documentNumber) LIKE LOWER(CONCAT('%', :query, '%'))) " +
             "ORDER BY d.createdAt DESC")
     List<Document> searchDocumentsByUser(@Param("user") User user, @Param("query") String query);
 
-    // Search scoped to primary account (including sub-accounts)
-    @Query("SELECT d FROM Document d WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
             "AND (LOWER(d.originalFilename) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.notes) LIKE LOWER(CONCAT('%', :query, '%')) " +
             "OR LOWER(d.documentNumber) LIKE LOWER(CONCAT('%', :query, '%'))) " +
@@ -192,26 +205,36 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     // OFFLINE QUERIES
     // ========================================
 
+    @EntityGraph(attributePaths = {"category", "familyMember"})
     List<Document> findByUserAndIsOfflineAvailableTrue(User user);
 
     @Query("SELECT d FROM Document d WHERE d.user.id = :userId AND d.isOfflineAvailable = true ORDER BY d.updatedAt DESC")
     List<Document> findOfflineDocuments(@Param("userId") Long userId, Pageable pageable);
 
-    @Query("SELECT d FROM Document d WHERE d.user.id = :userId AND d.isOfflineAvailable = true ORDER BY d.createdAt DESC")
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category " +
+            "WHERE d.user.id = :userId AND d.isOfflineAvailable = true ORDER BY d.createdAt DESC")
     List<Document> findOfflineDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
-    @Query("SELECT d FROM Document d WHERE d.user = :user AND d.isOfflineAvailable = true ORDER BY d.createdAt DESC")
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category " +
+            "WHERE d.user = :user AND d.isOfflineAvailable = true ORDER BY d.createdAt DESC")
     List<Document> findOfflineDocumentsByUser(@Param("user") User user);
 
     // ========================================
-    // PRIMARY ACCOUNT QUERIES
+    // PRIMARY ACCOUNT QUERIES — LEFT JOIN FETCH prevents LazyInitializationException
     // ========================================
 
-    @Query("SELECT d FROM Document d WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
     List<Document> findAllDocumentsForPrimaryAccount(@Param("userId") Long userId);
 
     @Query("SELECT d FROM Document d WHERE d.user.id = :userId OR d.user.primaryAccount.id = :userId")
     Page<Document> findAllDocumentsForPrimaryAccount(@Param("userId") Long userId, Pageable pageable);
+
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE (d.user.id = :userId OR d.user.primaryAccount.id = :userId) " +
+            "AND d.category.id = :categoryId ORDER BY d.createdAt DESC")
+    List<Document> findByCategoryForPrimaryAccount(@Param("userId") Long userId,
+                                                   @Param("categoryId") Long categoryId);
 
     // ========================================
     // DUPLICATE / HASH QUERIES
@@ -224,11 +247,8 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     @Query("SELECT COUNT(d) > 0 FROM Document d WHERE d.user.id = :userId AND d.fileHash = :fileHash")
     boolean existsByUserIdAndFileHash(@Param("userId") Long userId, @Param("fileHash") String fileHash);
 
-    /**
-     * ✅ Used by DocumentService.findDuplicates() — returns all docs whose hash
-     * appears more than once within the user's account family, grouped by hash.
-     */
-    @Query("SELECT d FROM Document d WHERE d.user.id IN " +
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category LEFT JOIN FETCH d.familyMember " +
+            "WHERE d.user.id IN " +
             "(SELECT u.id FROM User u WHERE u.id = :userId OR u.primaryAccount.id = :userId) " +
             "AND d.fileHash IS NOT NULL " +
             "AND d.fileHash IN (" +
@@ -239,9 +259,8 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
             "  GROUP BY d2.fileHash HAVING COUNT(d2) > 1" +
             ") ORDER BY d.fileHash, d.createdAt ASC")
     List<Document> findDuplicateDocuments(@Param("userId") Long userId);
+
     long countByUserId(Long userId);
 
     List<Document> findByUserId(Long userId);
-
-
 }

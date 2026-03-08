@@ -173,25 +173,10 @@
 		</dependency>
 
 
-		<!-- Google Drive REST API client -->
 		<dependency>
-			<groupId>com.google.apis</groupId>
-			<artifactId>google-api-services-drive</artifactId>
-			<version>v3-rev20240521-2.0.0</version>
-		</dependency>
-
-		<!-- Google Auth Library (Service Account / OAuth2) -->
-		<dependency>
-			<groupId>com.google.auth</groupId>
-			<artifactId>google-auth-library-oauth2-http</artifactId>
-			<version>1.23.0</version>
-		</dependency>
-
-		<!-- Jackson-based HTTP transport (required by Drive client) -->
-		<dependency>
-			<groupId>com.google.http-client</groupId>
-			<artifactId>google-http-client-jackson2</artifactId>
-			<version>1.44.1</version>
+			<groupId>com.cloudinary</groupId>
+			<artifactId>cloudinary-http44</artifactId>
+			<version>1.39.0</version>
 		</dependency>
 
 

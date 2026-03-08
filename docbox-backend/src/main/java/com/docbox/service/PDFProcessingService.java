@@ -57,8 +57,18 @@ public class PDFProcessingService {
      */
     private static final int MIN_NATIVE_WORDS = 20;
 
-    /** DPI used when rendering a PDF page for OCR. 200 DPI gives good Tesseract results. */
-    private static final int OCR_RENDER_DPI = 200;
+    /**
+     * DPI used when rendering a PDF page for OCR.
+     * 150 DPI is a good balance: faster than 200 DPI while still giving Tesseract
+     * enough resolution for standard document fonts.
+     */
+    private static final int OCR_RENDER_DPI = 150;
+
+    /**
+     * Max pages to OCR in the fallback path. We only need enough text for
+     * classification — first 2 pages are almost always sufficient.
+     */
+    private static final int OCR_MAX_PAGES = 2;
 
     @Autowired
     private OCRService ocrService;
@@ -141,7 +151,7 @@ public class PDFProcessingService {
         StringBuilder sb = new StringBuilder();
         try (PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
             PDFRenderer renderer = new PDFRenderer(document);
-            int pages = Math.min(document.getNumberOfPages(), maxPages);
+            int pages = Math.min(document.getNumberOfPages(), OCR_MAX_PAGES);
 
             for (int i = 0; i < pages; i++) {
                 try {

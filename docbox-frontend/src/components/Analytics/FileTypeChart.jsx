@@ -1,74 +1,72 @@
 import React from 'react';
-import { Paper, Typography, Box } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 
-const COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+const COLORS = ['#6366F1', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
 
-const FileTypeChart = ({ data, loading }) => {
-  if (loading || !data || data.length === 0) {
+const CustomTooltip = ({ active, payload }) => {
+  if (active && payload && payload.length) {
     return (
-      <Paper sx={{ p: 3, height: 400 }}>
-        <Typography variant="h6" gutterBottom>
-          File Types Distribution
+      <Box sx={{ p: 1.5, background: 'white', borderRadius: '10px', border: '1px solid #E2E8F0', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}>
+        <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#0F172A', mb: 0.25 }}>{payload[0].name}</Typography>
+        <Typography sx={{ fontSize: '0.75rem', color: '#6366F1', fontWeight: 600 }}>
+          {payload[0].value} files ({((payload[0].value / payload[0].payload.total) * 100).toFixed(1)}%)
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
-          <Typography variant="body2" color="text.secondary">
-            No data available
-          </Typography>
-        </Box>
-      </Paper>
+      </Box>
     );
   }
+  return null;
+};
 
-  const chartData = data.map((item) => ({
+const renderCustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+  if (percent < 0.05) return null;
+  const RADIAN = Math.PI / 180;
+  const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + r * Math.cos(-midAngle * RADIAN);
+  const y = cy + r * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central"
+      style={{ fontSize: 11, fontWeight: 700, fontFamily: 'DM Sans, sans-serif' }}>
+      {`${(percent * 100).toFixed(0)}%`}
+    </text>
+  );
+};
+
+const FileTypeChart = ({ data, loading }) => {
+  const isEmpty = loading || !data || data.length === 0;
+
+  const total = isEmpty ? 0 : data.reduce((s, d) => s + (parseInt(d.count) || 0), 0);
+  const chartData = isEmpty ? [] : data.map((item) => ({
     name: item.fileType || item.type || 'Unknown',
     value: parseInt(item.count) || 0,
+    total,
   }));
 
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const total = chartData.reduce((sum, item) => sum + item.value, 0);
-      const percentage = ((payload[0].value / total) * 100).toFixed(1);
-      return (
-        <Paper sx={{ p: 1.5 }}>
-          <Typography variant="body2" fontWeight="600">
-            {payload[0].name}
-          </Typography>
-          <Typography variant="caption" color="primary">
-            {payload[0].value} files ({percentage}%)
-          </Typography>
-        </Paper>
-      );
-    }
-    return null;
-  };
-
   return (
-    <Paper sx={{ p: 3, height: 400 }}>
-      <Typography variant="h6" gutterBottom fontWeight="600">
+    <Box sx={{ p: 3, borderRadius: '16px', border: '1px solid #E2E8F0', background: 'white', height: 340 }}>
+      <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A', mb: 2.5 }}>
         File Types Distribution
       </Typography>
-      <ResponsiveContainer width="100%" height={300}>
-        <PieChart>
-          <Pie
-            data={chartData}
-            cx="50%"
-            cy="50%"
-            labelLine={false}
-            label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-            outerRadius={80}
-            fill="#8884d8"
-            dataKey="value"
-          >
-            {chartData.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip content={<CustomTooltip />} />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
-    </Paper>
+      {isEmpty ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 240 }}>
+          <Typography sx={{ fontSize: '0.875rem', color: '#94A3B8' }}>No data available</Typography>
+        </Box>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <PieChart>
+            <Pie data={chartData} cx="50%" cy="45%" outerRadius={90} dataKey="value"
+              labelLine={false} label={renderCustomLabel}>
+              {chartData.map((_, i) => (
+                <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="white" strokeWidth={2} />
+              ))}
+            </Pie>
+            <Tooltip content={<CustomTooltip />} />
+            <Legend iconType="circle" iconSize={8}
+              wrapperStyle={{ fontSize: '0.75rem', fontFamily: 'DM Sans, sans-serif', color: '#64748B' }} />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
+    </Box>
   );
 };
 

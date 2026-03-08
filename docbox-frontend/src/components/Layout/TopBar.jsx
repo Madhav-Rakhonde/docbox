@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Toolbar,
@@ -11,52 +11,68 @@ import {
   Box,
   Badge,
   Tooltip,
+  Divider,
+  ListItemIcon,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
   Notifications,
-  CloudOff,
+  CloudDone,
   ExitToApp,
   Person,
+  KeyboardArrowDown,
+  Settings,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'react-toastify';
-import api from '../../services/api'; // ✅ ADDED for API calls
+import api from '../../services/api';
+
+// Page title map
+const PAGE_TITLES = {
+  '/dashboard':        'Dashboard',
+  '/documents':        'Documents',
+  '/analytics':        'Analytics',
+  '/family':           'Family',
+  '/family-documents': 'Family Documents',
+  '/family-members':   'Family Members',
+  '/notifications':    'Notifications',
+  '/schemes':          'Eligible Schemes',
+  '/eligible-schemes': 'Eligible Schemes',
+  '/settings':         'Settings',
+  '/permissions':      'Permissions',
+  '/my-documents':     'My Documents',
+};
 
 const TopBar = ({ onMenuClick, drawerWidth, isMobile }) => {
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const location  = useLocation();
   const { user, logout } = useAuth();
-  const [anchorEl, setAnchorEl] = useState(null);
-  const [notificationCount, setNotificationCount] = useState(0); // ✅ ADDED: Dynamic count
 
-  // ✅ ADDED: Load notification count on mount
+  const [anchorEl, setAnchorEl]                 = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
+
+  const pageTitle = PAGE_TITLES[location.pathname] || 'DocBox';
+
+  // Load notification count
   useEffect(() => {
     loadNotificationCount();
-    // Refresh count every 30 seconds
     const interval = setInterval(loadNotificationCount, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  // ✅ ADDED: Function to load notification count
   const loadNotificationCount = async () => {
     try {
       const response = await api.get('/notifications/unread/count');
       if (response.data.success) {
         setNotificationCount(response.data.data.count || 0);
       }
-    } catch (error) {
-      console.error('Failed to load notification count:', error);
-      // Silently fail - don't show error to user
+    } catch {
+      // Silently fail
     }
   };
 
-  const handleMenu = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
+  const handleMenu   = (e) => setAnchorEl(e.currentTarget);
+  const handleClose  = () => setAnchorEl(null);
 
   const handleProfile = () => {
     navigate('/settings');
@@ -68,121 +84,240 @@ const TopBar = ({ onMenuClick, drawerWidth, isMobile }) => {
       await logout();
       toast.success('Logged out successfully');
       navigate('/login');
-    } catch (error) {
+    } catch {
       toast.error('Logout failed');
     }
     handleClose();
   };
 
-  // ✅ ADDED: Handle notification click
   const handleNotificationClick = () => {
     navigate('/notifications');
-    // Optionally refresh count after navigation
     setTimeout(loadNotificationCount, 500);
   };
 
   return (
     <AppBar
       position="fixed"
+      elevation={0}
       sx={{
         width: { md: `calc(100% - ${drawerWidth}px)` },
-        ml: { md: `${drawerWidth}px` },
-        boxShadow: 1,
-        bgcolor: 'background.paper',
-        color: 'text.primary',
+        ml:    { md: `${drawerWidth}px` },
+        background: 'rgba(248,249,252,0.85)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        borderBottom: '1px solid #E2E8F0',
+        boxShadow: '0 1px 0 #E2E8F0',
+        color: '#0F172A',
+        zIndex: (theme) => theme.zIndex.drawer - 1,
       }}
     >
-      <Toolbar>
-        {/* Menu button for mobile */}
+      <Toolbar
+        sx={{
+          minHeight: { xs: 56, sm: 64 },
+          px: { xs: 2, sm: 3 },
+          gap: 1,
+        }}
+      >
+        {/* Mobile menu toggle */}
         {isMobile && (
           <IconButton
-            color="inherit"
-            aria-label="open drawer"
             edge="start"
             onClick={onMenuClick}
-            sx={{ mr: 2 }}
+            sx={{
+              color: '#475569',
+              mr: 1,
+              '&:hover': { background: '#F1F5F9' },
+            }}
           >
             <MenuIcon />
           </IconButton>
         )}
 
-        {/* Page title - hide on mobile to save space */}
-        <Typography
-          variant="h6"
-          noWrap
-          component="div"
-          sx={{ flexGrow: 1, display: { xs: 'none', sm: 'block' } }}
-        >
-          {/* Will be updated based on current page */}
-        </Typography>
-
-        {/* Right side icons */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {/* Offline indicator */}
-          <Tooltip title="Offline Mode Active">
-            <IconButton color="inherit" size={isMobile ? 'small' : 'medium'}>
-              <Badge color="success" variant="dot">
-                <CloudOff />
-              </Badge>
-            </IconButton>
-          </Tooltip>
-
-          {/* Notifications - ✅ FIXED: Added onClick handler and dynamic count */}
-          <Tooltip title="Notifications">
-            <IconButton 
-              color="inherit" 
-              size={isMobile ? 'small' : 'medium'}
-              onClick={handleNotificationClick} // ✅ ADDED: Navigate to notifications
-            >
-              <Badge 
-                badgeContent={notificationCount} // ✅ CHANGED: Dynamic count
-                color="error"
-                max={99} // ✅ ADDED: Show 99+ for large numbers
-              >
-                <Notifications />
-              </Badge>
-            </IconButton>
-          </Tooltip>
-
-          {/* User menu */}
-          <Tooltip title="Account">
-            <IconButton
-              onClick={handleMenu}
-              size={isMobile ? 'small' : 'medium'}
-              sx={{ ml: 1 }}
-            >
-              <Avatar
-                sx={{
-                  width: isMobile ? 32 : 40,
-                  height: isMobile ? 32 : 40,
-                  bgcolor: 'primary.main',
-                }}
-              >
-                {user?.fullName?.charAt(0).toUpperCase()}
-              </Avatar>
-            </IconButton>
-          </Tooltip>
+        {/* Page Title */}
+        <Box sx={{ flexGrow: 1 }}>
+          <Typography
+            variant="h6"
+            sx={{
+              fontWeight: 700,
+              fontSize: { xs: '1rem', sm: '1.125rem' },
+              color: '#0F172A',
+              letterSpacing: '-0.01em',
+            }}
+          >
+            {pageTitle}
+          </Typography>
         </Box>
 
-        {/* User menu dropdown */}
+        {/* Right-side actions */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+
+          {/* Offline indicator */}
+          <Tooltip title="Offline Mode Active" arrow>
+            <Box
+              sx={{
+                display: { xs: 'none', sm: 'flex' },
+                alignItems: 'center',
+                gap: 0.75,
+                px: 1.5,
+                py: 0.75,
+                borderRadius: '99px',
+                background: 'rgba(16,185,129,0.08)',
+                border: '1px solid rgba(16,185,129,0.2)',
+                cursor: 'default',
+              }}
+            >
+              <CloudDone sx={{ fontSize: 14, color: '#10B981' }} />
+              <Typography sx={{ fontSize: '0.75rem', fontWeight: 500, color: '#10B981' }}>
+                Online
+              </Typography>
+            </Box>
+          </Tooltip>
+
+          {/* Notifications */}
+          <Tooltip title="Notifications" arrow>
+            <IconButton
+              onClick={handleNotificationClick}
+              sx={{
+                color: '#475569',
+                width: 40,
+                height: 40,
+                '&:hover': { background: '#F1F5F9', color: '#0F172A' },
+              }}
+            >
+              <Badge
+                badgeContent={notificationCount}
+                color="error"
+                max={99}
+                sx={{
+                  '& .MuiBadge-badge': {
+                    fontSize: '0.6rem',
+                    minWidth: 16,
+                    height: 16,
+                    padding: '0 4px',
+                  },
+                }}
+              >
+                <Notifications sx={{ fontSize: 20 }} />
+              </Badge>
+            </IconButton>
+          </Tooltip>
+
+          {/* User Menu Trigger */}
+          <Box
+            onClick={handleMenu}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              pl: 1,
+              pr: 1.5,
+              py: 0.75,
+              ml: 0.5,
+              borderRadius: '99px',
+              border: '1px solid #E2E8F0',
+              background: '#FFFFFF',
+              cursor: 'pointer',
+              transition: 'all 150ms ease',
+              '&:hover': {
+                background: '#F8F9FC',
+                borderColor: '#CBD5E1',
+                boxShadow: '0 2px 8px rgba(15,23,42,0.06)',
+              },
+            }}
+          >
+            <Avatar
+              sx={{
+                width: 28,
+                height: 28,
+                background: 'linear-gradient(135deg, #6366F1 0%, #818CF8 100%)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+              }}
+            >
+              {user?.fullName?.charAt(0).toUpperCase()}
+            </Avatar>
+            <Typography
+              sx={{
+                display: { xs: 'none', sm: 'block' },
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: '#0F172A',
+                maxWidth: 120,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {user?.fullName?.split(' ')[0]}
+            </Typography>
+            <KeyboardArrowDown sx={{ fontSize: 16, color: '#94A3B8' }} />
+          </Box>
+        </Box>
+
+        {/* User Dropdown Menu */}
         <Menu
           anchorEl={anchorEl}
           open={Boolean(anchorEl)}
           onClose={handleClose}
-          anchorOrigin={{
-            vertical: 'bottom',
-            horizontal: 'right',
-          }}
-          transformOrigin={{
-            vertical: 'top',
-            horizontal: 'right',
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          PaperProps={{
+            elevation: 3,
+            sx: {
+              mt: 1,
+              minWidth: 200,
+              borderRadius: '12px',
+              border: '1px solid #E2E8F0',
+              overflow: 'visible',
+              '&::before': {
+                content: '""',
+                display: 'block',
+                position: 'absolute',
+                top: -5,
+                right: 16,
+                width: 10,
+                height: 10,
+                background: '#fff',
+                borderTop: '1px solid #E2E8F0',
+                borderLeft: '1px solid #E2E8F0',
+                transform: 'rotate(45deg)',
+                zIndex: 0,
+              },
+            },
           }}
         >
-          <MenuItem onClick={handleProfile}>
-            <Person sx={{ mr: 1 }} /> Profile
+          {/* User Info Header */}
+          <Box sx={{ px: 2, pt: 1.5, pb: 1 }}>
+            <Typography sx={{ fontWeight: 600, fontSize: '0.875rem', color: '#0F172A' }}>
+              {user?.fullName}
+            </Typography>
+            <Typography sx={{ fontSize: '0.75rem', color: '#64748B' }}>
+              {user?.email}
+            </Typography>
+          </Box>
+
+          <Divider sx={{ my: 0.5 }} />
+
+          <MenuItem
+            onClick={handleProfile}
+            sx={{ gap: 1.5, px: 2, py: 1, fontSize: '0.875rem', borderRadius: '6px', mx: 0.5 }}
+          >
+            <ListItemIcon sx={{ minWidth: 'unset' }}>
+              <Settings sx={{ fontSize: 16, color: '#475569' }} />
+            </ListItemIcon>
+            Settings
           </MenuItem>
-          <MenuItem onClick={handleLogout}>
-            <ExitToApp sx={{ mr: 1 }} /> Logout
+
+          <Divider sx={{ my: 0.5 }} />
+
+          <MenuItem
+            onClick={handleLogout}
+            sx={{ gap: 1.5, px: 2, py: 1, fontSize: '0.875rem', color: '#EF4444', borderRadius: '6px', mx: 0.5, mb: 0.5 }}
+          >
+            <ListItemIcon sx={{ minWidth: 'unset' }}>
+              <ExitToApp sx={{ fontSize: 16, color: '#EF4444' }} />
+            </ListItemIcon>
+            Log out
           </MenuItem>
         </Menu>
       </Toolbar>

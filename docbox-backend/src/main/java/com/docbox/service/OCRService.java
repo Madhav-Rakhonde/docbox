@@ -150,42 +150,43 @@ public class OCRService {
             BufferedImage original = ImageIO.read(new ByteArrayInputStream(imageBytes));
             if (original == null) throw new OCRProcessingException("Failed to read image");
 
-            // v3: upscale tiny images before any processing
             BufferedImage upscaled = upscaleIfNeeded(original);
 
-            // --- Pass 1: adaptive binarisation + English ---
+            // --- Pass 1: adaptive binarisation + English (fastest, covers most docs) ---
             BufferedImage adaptive   = preprocessAdaptive(upscaled);
             OcrResult    engAdaptive = performOCR(adaptive, getEnglishTesseract(), "English-Adaptive");
+
+            // Early exit: if English adaptive gives rich text, skip remaining passes.
+            // This saves ~2-4s for standard English/printed docs (most uploads).
+            if (engAdaptive.getWordCount() >= 30) {
+                logger.info("✅ Early-exit OCR (English-Adaptive sufficient): {} words", engAdaptive.getWordCount());
+                return engAdaptive;
+            }
 
             // --- Pass 2: global binarisation + English ---
             BufferedImage global   = preprocessGlobal(upscaled);
             OcrResult    engGlobal = performOCR(global, getEnglishTesseract(), "English-Global");
+            OcrResult    bestEng   = selectBestResult(engAdaptive, engGlobal);
 
-            // Best English result so far
-            OcrResult bestEng = selectBestResult(engAdaptive, engGlobal);
+            // Early exit for good English result from either preprocessing
+            if (bestEng.getWordCount() >= 20) {
+                logger.info("✅ Early-exit OCR (English sufficient): {} words", bestEng.getWordCount());
+                return bestEng;
+            }
 
-            // --- Pass 3 & 4: Devanagari passes (Hindi + Marathi) — ALWAYS RUN ---
-            //
-            // v3 FIX (ROOT CAUSE 1):
-            // v2 checked hasSignificantDevanagari(bestEng.getText()) first, but for
-            // pure Marathi documents (income cert, caste cert, domicile cert) the
-            // English-only OCR returns an EMPTY or near-empty string — so the check
-            // returned false and Marathi/Hindi passes were NEVER triggered.
-            //
-            // Fix: ALWAYS run Hindi + Marathi passes on the adaptive-preprocessed image.
-            // The merge step already handles the case where Devanagari result is weak
-            // (it returns whichever result has more words × confidence).
-            // Cost: ~0.5s extra per image — acceptable for document classification accuracy.
-            OcrResult hinResult = performOCR(adaptive, getHindiTesseract(),   "Hindi");
-            OcrResult marResult = performOCR(adaptive, getMarathiTesseract(), "Marathi");
+            // --- Pass 3 & 4: Devanagari (Hindi + Marathi) ---
+            // Only triggered when English passes produced sparse text — i.e. the document
+            // is likely scanned Devanagari. This restores accuracy for Marathi/Hindi docs
+            // while avoiding the 2-pass cost for normal English documents.
+            logger.info("📸 Sparse English ({} words) — running Devanagari passes", bestEng.getWordCount());
+            OcrResult hinResult      = performOCR(adaptive, getHindiTesseract(),   "Hindi");
+            OcrResult marResult      = performOCR(adaptive, getMarathiTesseract(), "Marathi");
             OcrResult bestDevanagari = selectBestResult(hinResult, marResult);
 
             logger.info("📖 Devanagari OCR: {} words (Hindi={}, Marathi={})",
                     bestDevanagari.getWordCount(), hinResult.getWordCount(), marResult.getWordCount());
 
-            // Merge: English + Devanagari — mergeResults handles weak/empty results gracefully
             OcrResult merged = mergeResults(bestEng, bestDevanagari);
-
             logger.info("✅ Full OCR: {} words, {:.1f}% conf, lang: {}",
                     merged.getWordCount(), merged.getConfidence(), merged.getDetectedLanguage());
             return merged;
