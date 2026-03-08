@@ -72,7 +72,7 @@ const ShareViewPage = () => {
     if (!document) return;
     try {
       setDownloading(true);
-      window.open(`http://localhost:8080/api/share/${token}/download`, '_blank');
+      window.open(`${import.meta.env.VITE_API_URL}/share/${token}/download`, '_blank');
       toast.success('Download started!');
     } catch (err) {
       console.error('Download error:', err);

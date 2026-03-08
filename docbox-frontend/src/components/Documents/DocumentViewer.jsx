@@ -10,6 +10,8 @@ import {
 import { format } from 'date-fns';
 import { toast } from 'react-toastify';
 
+const API_BASE = import.meta.env.VITE_API_URL;
+
 const MetaPill = ({ children, bg = '#F1F5F9', color = '#475569' }) => (
   <Box sx={{ display: 'inline-flex', px: 1.25, py: 0.3, borderRadius: '6px', background: bg }}>
     <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, color }}>{children}</Typography>
@@ -31,7 +33,7 @@ const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         method: 'GET', headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load document');
@@ -43,7 +45,7 @@ const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
   const handleDownload = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         method: 'GET', headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Download failed');

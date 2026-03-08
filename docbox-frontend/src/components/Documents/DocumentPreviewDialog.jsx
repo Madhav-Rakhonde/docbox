@@ -9,6 +9,8 @@ import {
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 
+const API_BASE = import.meta.env.VITE_API_URL;
+
 const MetaPill = ({ children, bg = '#F1F5F9', color = '#475569' }) => (
   <Box sx={{ display: 'inline-flex', px: 1.25, py: 0.3, borderRadius: '6px', background: bg }}>
     <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, color }}>{children}</Typography>
@@ -31,7 +33,7 @@ const DocumentPreviewDialog = ({ open, document, onClose, onDelete, onUpdate, on
   const loadPreview = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       });
       if (!response.ok) throw new Error('Failed to load preview');
