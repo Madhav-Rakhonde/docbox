@@ -563,10 +563,7 @@ const Permissions = () => {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <span>{perm.categoryIcon || '📁'}</span>
-                          <Typography variant="body2">{perm.categoryName || 'Unknown'}</Typography>
-                        </Box>
+                        <Typography variant="body2">{perm.categoryName || 'Unknown'}</Typography>
                       </TableCell>
                       <TableCell>
                         <Chip
