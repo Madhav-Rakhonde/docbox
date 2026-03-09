@@ -24,7 +24,6 @@ import Notifications from './pages/Notifications';
 import MyDocuments from './pages/MyDocuments';
 import SharePage from './pages/SharePage';
 
-// NEW: Scheme Discovery & Family Documents Pages
 import EligibleSchemes from './pages/EligibleSchemes';
 import FamilyDocumentsViewer from './pages/FamilyDocumentsViewer';
 
