@@ -99,8 +99,11 @@ const CategorySelector = ({ open, onClose, document, onSuccess }) => {
 
     setLoading(true);
     try {
+      const finalIcon = customIcon.trim() || newCategoryIcon;
+      
       const response = await categoryService.createCategory({
         name: newCategoryName,
+        icon: finalIcon,
         description: newCategoryDescription,
       });
 
@@ -113,6 +116,8 @@ const CategorySelector = ({ open, onClose, document, onSuccess }) => {
       // Reset form
       setShowCreateNew(false);
       setNewCategoryName('');
+      setNewCategoryIcon('📁');
+      setCustomIcon('');
       setNewCategoryDescription('');
     } catch (error) {
       showToast(error.response?.data?.message || 'Failed to create category', 'error');
@@ -125,6 +130,8 @@ const CategorySelector = ({ open, onClose, document, onSuccess }) => {
     setShowCreateNew(false);
     setSelectedCategory('');
     setNewCategoryName('');
+    setNewCategoryIcon('📁');
+    setCustomIcon('');
     setNewCategoryDescription('');
     onClose();
   };
@@ -160,7 +167,10 @@ const CategorySelector = ({ open, onClose, document, onSuccess }) => {
                 >
                   {categories.map((cat) => (
                     <MenuItem key={cat.id} value={cat.id}>
-                      {cat.name}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <span style={{ fontSize: '1.2rem' }}>{cat.icon}</span>
+                        <span>{cat.name}</span>
+                      </Box>
                     </MenuItem>
                   ))}
                 </Select>
@@ -186,8 +196,32 @@ const CategorySelector = ({ open, onClose, document, onSuccess }) => {
               />
 
               <Typography variant="body2" sx={{ mb: 1 }}>
-                Description (optional):
+                Select Icon:
               </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                {COMMON_ICONS.map((icon) => (
+                  <Button
+                    key={icon}
+                    variant={newCategoryIcon === icon ? 'contained' : 'outlined'}
+                    onClick={() => {
+                      setNewCategoryIcon(icon);
+                      setCustomIcon('');
+                    }}
+                    sx={{ minWidth: '48px', fontSize: '1.5rem' }}
+                  >
+                    {icon}
+                  </Button>
+                ))}
+              </Box>
+
+              <TextField
+                fullWidth
+                label="Or Enter Custom Icon (emoji)"
+                value={customIcon}
+                onChange={(e) => setCustomIcon(e.target.value)}
+                placeholder="🎯"
+                sx={{ mb: 2 }}
+              />
 
               <TextField
                 fullWidth
