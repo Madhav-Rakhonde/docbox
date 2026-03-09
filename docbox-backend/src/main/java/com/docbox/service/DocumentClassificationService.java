@@ -6,6 +6,8 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -156,6 +158,7 @@ import java.util.stream.Collectors;
  */
 // NOTE: In Spring Boot context, re-add: import org.springframework.stereotype.Service;
 // and add @Service annotation. Removed here for standalone compilation without Spring.
+@Service
 public class DocumentClassificationService {
 
     // ════════════════════════════════════════════════════════════════════════════
