@@ -26,6 +26,8 @@ import {
   InsertDriveFile,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
+
+const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api`;
 import { toast } from 'react-toastify';
 
 const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
@@ -59,7 +61,7 @@ const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
       // Get token from localStorage
       const token = localStorage.getItem('token');
       
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -84,7 +86,7 @@ const DocumentViewer = ({ open, document, onClose, onDelete, onUpdate }) => {
   const handleDownload = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,

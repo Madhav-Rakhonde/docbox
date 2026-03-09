@@ -27,6 +27,8 @@ import {
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 
+const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api`;
+
 const DocumentPreviewDialog = ({ open, document, onClose, onDelete, onUpdate, onDownload }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -52,7 +54,7 @@ const DocumentPreviewDialog = ({ open, document, onClose, onDelete, onUpdate, on
   const loadPreview = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8080/api/documents/${document.id}/download`, {
+      const response = await fetch(`${API_BASE}/documents/${document.id}/download`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },

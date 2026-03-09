@@ -1,5 +1,8 @@
 package com.docbox.service;
 
+
+import org.springframework.stereotype.Service;
+
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -156,8 +159,7 @@ import org.springframework.stereotype.Service;
  *
  * ─────────────────────────────────────────────────────────────────────────────
  */
-// NOTE: In Spring Boot context, re-add: import org.springframework.stereotype.Service;
-// and add @Service annotation. Removed here for standalone compilation without Spring.
+
 @Service
 public class DocumentClassificationService {
 
