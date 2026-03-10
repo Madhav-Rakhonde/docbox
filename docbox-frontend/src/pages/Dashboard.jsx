@@ -165,6 +165,12 @@ const Dashboard = () => {
     return `${(mb / 1024).toFixed(2)} GB`;
   };
 
+  const formatPercentage = (p) => {
+    if (p == null) return 0;
+    if (p > 0 && p < 0.05) return '<0.1';
+    return p.toFixed(1);
+  };
+
   const greeting = () => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -205,7 +211,7 @@ const Dashboard = () => {
           {
             title: 'Storage Used',
             value: formatBytes(stats?.storageUsedBytes),
-            subtitle: `${stats?.storagePercentage?.toFixed(1) ?? 0}% of your limit`,
+            subtitle: `${formatPercentage(stats?.storagePercentage)}% of your limit`,
             icon: Storage,
             accent: '#3B82F6',
           },

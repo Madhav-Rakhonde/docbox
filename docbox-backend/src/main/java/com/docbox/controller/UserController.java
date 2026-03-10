@@ -7,6 +7,7 @@ import com.docbox.util.SecurityUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.docbox.service.AnalyticsService;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -21,6 +22,9 @@ public class UserController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private AnalyticsService analyticsService;
 
     /**
      * Get current user profile
@@ -66,12 +70,13 @@ public class UserController {
         stats.put("isPrimaryAccount", SecurityUtils.isCurrentUserPrimaryAccount());
         stats.put("isSubAccount", SecurityUtils.isCurrentUserSubAccount());
 
-        // These will be implemented when we create DocumentService
-        stats.put("totalDocuments", 0);
-        stats.put("storageUsedBytes", 0L);
-        stats.put("storageLimitBytes", 5L * 1024 * 1024 * 1024); // 5GB
-        stats.put("storagePercentage", 0.0);
-        stats.put("totalFamilyMembers", 0);
+        // reuse analytics service to get actual document/storage counts
+        Map<String,Object> dash = analyticsService.getDashboardStats();
+        stats.put("totalDocuments", dash.getOrDefault("totalDocuments", 0L));
+        stats.put("storageUsedBytes", dash.getOrDefault("storageUsedBytes", 0L));
+        stats.put("storageLimitBytes", dash.getOrDefault("storageLimit", 5L * 1024 * 1024 * 1024));
+        stats.put("storagePercentage", dash.getOrDefault("storagePercentage", 0.0));
+        stats.put("totalFamilyMembers", dash.getOrDefault("totalFamilyMembers", 0L));
 
         return ResponseEntity.ok(ApiResponse.success(
                 "User statistics retrieved successfully",

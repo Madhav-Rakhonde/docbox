@@ -9,156 +9,6 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-/**
- * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║   DocBox — Document Classification Service  v6.0                           ║
- * ╠══════════════════════════════════════════════════════════════════════════════╣
- * ║ PRODUCTION FIXES IN v6.0 (complete expiry detection overhaul + new bugs):  ║
- * ║                                                                              ║
- * ║  FIX-V  "valid from.*?to" was a REGEX used as literal in indexOf() →       ║
- * ║         NEVER matched. Replaced with dedicated VALID_FROM_TO_RANGE pattern  ║
- * ║         handled via regex scan, not keyword lookup.                        ║
- * ║                                                                              ║
- * ║  FIX-B  extractExpiryAfterEnglishKeyword() only scanned FIRST occurrence   ║
- * ║         of each keyword. DL docs with multiple "COV Valid Till" lines       ║
- * ║         returned earliest date. Now loops ALL occurrences and picks the     ║
- * ║         LATEST (farthest future) expiry date from any keyword match.        ║
- * ║                                                                              ║
- * ║  FIX-C  "valid for" in EXPIRY_KW_DATE_AFTER caused S-6 to match "valid     ║
- * ║         for 3 years" and grab arbitrary nearby date. Removed from absolute  ║
- * ║         keyword list; relative handling is done in S-8 only.               ║
- * ║                                                                              ║
- * ║  FIX-I  S-9 heuristic returned any future date when bestScore==0 (no       ║
- * ║         expiry context at all). Changed to require score > 0 to prevent     ║
- * ║         false positives on documents that happen to have future dates.      ║
- * ║                                                                              ║
- * ║  FIX-S  "this certificate is valid" / "this document is valid" in          ║
- * ║         EXPIRY_KW_DATE_AFTER grabbed dates after those phrases even when    ║
- * ║         they were followed by "for N years" not a calendar date. Moved to   ║
- * ║         CERTIFICATE_VALIDITY_PHRASES list; handled separately with guard.  ║
- * ║                                                                              ║
- * ║  FIX-H  MARATHI_VALIDITY_PHRASE gap [^०-९\\d]{0,40} too small. Increased   ║
- * ║         to {0,80} to handle longer certificate type descriptions.           ║
- * ║                                                                              ║
- * ║  FIX-N  EXPIRY_LABELED_FIELD missing UNICODE_CHARACTER_CLASS flag. Added.  ║
- * ║                                                                              ║
- * ║  FIX-Y  EXPIRY_PERIOD_RANGE "to" separator missed em-dash U+2014 (—) and  ║
- * ║         en-dash U+2013 (–). Added all Unicode dash variants.               ║
- * ║                                                                              ║
- * ║  FIX-T  extractExpiryAfterMarathiLabel only found first occurrence per     ║
- * ║         keyword. Now loops all and picks farthest future date.              ║
- * ║                                                                              ║
- * ║  FIX-W  Hindi relative expiry used existingData.get("date1") (first date   ║
- * ║         in doc) as base, even if it was a DOB. Now finds the date closest  ║
- * ║         to the relative validity phrase as the issue date anchor.           ║
- * ║                                                                              ║
- * ║  FIX-NEW1  Passport "14 MAY 2033" — DATE_ENGLISH_ABBR pattern extended    ║
- * ║         to also accept uppercase 3-letter month abbreviations without       ║
- * ║         separator (space only), matching MRZ-adjacent date lines.          ║
- * ║                                                                              ║
- * ║  FIX-NEW2  Added EXPIRY_COMPACT_ENGLISH pattern: "Exp: 31/03/2026",        ║
- * ║         "EXP DATE 31-03-2026", "EXPIRY 31.03.2026" (insurance/DL compact). ║
- * ║                                                                              ║
- * ║  FIX-NEW3  Added support for "Valid Till Date" field (Aadhaar letter fmt). ║
- * ║                                                                              ║
- * ║  FIX-NEW4  Insurance "Risk Commencement / Risk Expiry" date range:         ║
- * ║         pattern added to pick expiry (second) date from insurance headers. ║
- * ║                                                                              ║
- * ║  FIX-NEW5  Added DATE_DEVANAGARI_NUMERIC_LOOSE to handle Devanagari dates  ║
- * ║         with mixed digit types: "१५/03/2025" (Deva day, ASCII month/year). ║
- * ║                                                                              ║
- * ║  FIX-NEW6  "Samapti Tithi" (समाप्ति तिथि) without colon or space was      ║
- * ║         not matching HINDI_SAMAAPTI_TITHI. Pattern relaxed.                ║
- * ║                                                                              ║
- * ║  FIX-NEW7  Added Marathi "चलते तारखेपर्यंत" (until current date) and      ║
- * ║         "नूतनीकरण आवश्यक दिनांक" (renewal required date) patterns.        ║
- * ║                                                                              ║
- * ║  FIX-NEW8  Driving Licence: "Validity of DL: DD/MM/YYYY" and              ║
- * ║         "NT Valid Till: DD/MM/YYYY" now captured by DL-specific pass.      ║
- * ║                                                                              ║
- * ║  FIX-NEW9  Date deduplication now runs BEFORE strategy pipeline so that    ║
- * ║         allDates passed to S-3/S-8/S-9 has no duplicates.                  ║
- * ║                                                                              ║
- * ║  FIX-NEW10 Added AADHAAR_VALIDITY_LETTER pattern: "This letter is valid    ║
- * ║         only for 90 days from the date of download" — returns relative date.║
- * ║                                                                              ║
- * ║ All v5.0 features and fixes are preserved.                                 ║
- * ╚══════════════════════════════════════════════════════════════════════════════╝
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * DEEP RESEARCH: Indian Document Expiry Reference (v6.0 Extended)
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * DOCUMENTS WITH NO EXPIRY (expiryDate = null):
- *   Aadhaar Card           — Permanent (Aadhaar letter valid 90 days)
- *   PAN Card               — Permanent
- *   Voter ID (EPIC)        — Permanent
- *   Birth Certificate      — Permanent
- *   Marriage Certificate   — Permanent
- *   Education Certificates — Permanent
- *   Caste Certificate SC/ST— Permanent in most states
- *   7/12 Extract           — Not an expiry document
- *
- * DOCUMENTS WITH EXPIRY:
- *   Passport (adult)       : 10 years. "Date of Expiry / समाप्ति की तिथि"
- *                            Format: "14 MAY 2033" (uppercase abbr English)
- *   Passport (minor)       : 5 years.
- *   Driving Licence (NT)   : 20 years or till age 50.
- *   Driving Licence (Trans): 3 years. "Valid Till" per COV class. Multiple lines.
- *   Income Certificate     : 1–3 years. Marathi/Hindi/English.
- *   Caste Cert (OBC)       : 1–3 years in most states.
- *   Domicile Certificate   : Permanent in most states; some 3 years.
- *   Ration Card            : Annual renewal. "वैध तारीख" in Marathi.
- *   Insurance Policy       : Annual. "Risk Expiry Date" / "Policy Expiry Date"
- *                            Format: "DD/MM/YYYY" — both dates on same line.
- *   Medical Fitness Cert   : 1 year (CMV/HMV driver fitness).
- *   Pollution Under Control: 1 year (PUC cert for vehicles).
- *   Internationl Travel Ins: Trip specific. "Coverage End Date".
- *
- * REAL-WORLD PHRASE CATALOGUE (from Maharashtra, UP, Bihar, MP, Rajasthan docs):
- *
- * MARATHI — Comprehensive:
- *   "हे प्रमाणपत्र दिनांक 31 मार्च 2026 पर्यंत वैध राहील."
- *   "सदरील प्रमाणपत्र दिनांक 31/03/2026 पर्यंत वैध आहे."
- *   "या प्रमाणपत्राची मुदत 31/03/2026 पर्यंत आहे."
- *   "वैधता : 31/03/2026"
- *   "मुदत: 31/03/2026"
- *   "ता. 31/03/2026 पर्यंत वैध"
- *   "नूतनीकरण तारीख : 31/03/2026"
- *   "दिनांक ३१ मे २०२६ पर्यंतच वैध"
- *   "हे दाखला दिनांक 31 ऑगस्ट 2025 पर्यंत वैध राहील."
- *   "प्रमाणपत्राची वैधता तारीख: 31/03/2026"
- *   "वैधता कालावधी : 31/03/2026 पर्यंत"
- *
- * HINDI — Comprehensive:
- *   "यह प्रमाणपत्र दिनांक 31/03/2026 तक मान्य है।"
- *   "यह प्रमाण पत्र 31 मार्च 2026 तक वैध है।"
- *   "वैधता तिथि : 31/03/2026"
- *   "समाप्ति तिथि : 31/03/2026"
- *   "इस प्रमाण पत्र की अवधि 31/03/2026 तक है।"
- *   "प्रस्तुत प्रमाण पत्र आगामी 3 वर्षों के लिए मान्य है।"
- *   "यह प्रमाण-पत्र तीन वर्ष की अवधि के लिए मान्य होगा।"
- *   "मान्यता तिथि: 31/03/2026"
- *   "नवीनीकरण तिथि: 31/03/2026"
- *
- * ENGLISH — Comprehensive:
- *   "Valid Till: 31/03/2026"
- *   "Valid Upto: 31-03-2026"
- *   "Date of Expiry: 14 MAY 2033"
- *   "Expiry Date: 31/03/2026"
- *   "Validity: 31.03.2026"
- *   "Validity Period: 01/04/2025 to 31/03/2026"
- *   "Risk Expiry Date: 31/03/2026"
- *   "This certificate is valid till 31/03/2026."
- *   "Valid for a period of 3 years from date of issue."
- *   "COV Valid Till: 31/03/2026"
- *   "EXP: 31/03/2026"
- *
- * ─────────────────────────────────────────────────────────────────────────────
- */
 
 @Service
 public class DocumentClassificationService {
@@ -391,7 +241,7 @@ public class DocumentClassificationService {
     private static final List<String> CASTE_HINDI_TITLE_SIGNALS = Arrays.asList(
             "जाति प्रमाण-पत्र", "जाति प्रमाणपत्र", "जाति प्रमाण पत्र", "जात प्रमाणपत्र");
     private static final List<String> CASTE_OBC_HINDI_SIGNALS = Arrays.asList(
-            "अत्यन्त पिछड़ा वर्ग", "पिछड़ा वर्ग", "अति पिछड़ा वर्ग", "अन्य पिछड़े वर्ग");
+            "अत्यन्त पिछड़ा वर्ग", "पिछड़ा वरग", "अति पिछड़ा वर्ग", "अन्य पिछड़े वर्ग");
     private static final List<String> CASTE_SC_ST_LEGAL_LOWER = Arrays.asList(
             "scheduled caste", "scheduled tribe", "scheduled castes order",
             "scheduled tribes order", "constitution (scheduled castes)",
@@ -460,7 +310,7 @@ public class DocumentClassificationService {
             Pattern.UNICODE_CHARACTER_CLASS);
 
     // ════════════════════════════════════════════════════════════════════════════
-    // EXPIRY PATTERNS — v6.0
+    // EXPIRY PATTERNS — v6.1
     // ════════════════════════════════════════════════════════════════════════════
 
     /**
@@ -523,14 +373,21 @@ public class DocumentClassificationService {
 
     // ── MARATHI EXPIRY PATTERNS ──────────────────────────────────────────────────
 
+    /**
+     * FIX-R2: Increased \s{0,5} → \s{0,15} on both gaps (year→पर्यंत and पर्यंत→वैध).
+     * FIX-R2: Relaxed trailing clause to accept "राहील", "आहे", "असेल" and sentence terminators.
+     * This makes the pattern robust to OCR line-wraps and variant sentence endings.
+     */
     private static final Pattern MARATHI_PARYANT_VALID = Pattern.compile(
             "([०-९\\d]{1,2})\\s*(" + MARATHI_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
-                    "\\s{0,5}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|valid)(?:\\s+राहील|\\.)?",
+                    "\\s{0,15}(?:पर्यंत(?:च)?)\\s{0,15}(?:वैध|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern MARATHI_PARYANT_NUMERIC = Pattern.compile(
             "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
-                    "\\s{0,5}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|valid)(?:\\s+राहील|\\.)?",
+                    "\\s{0,15}(?:पर्यंत(?:च)?)\\s{0,15}(?:वैध|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern MARATHI_DINANK_PARYANT = Pattern.compile(
@@ -578,6 +435,32 @@ public class DocumentClassificationService {
                     "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})",
             Pattern.UNICODE_CHARACTER_CLASS);
 
+    /**
+     * FIX-R3: NEW dedicated pattern for the canonical income/caste certificate sentence.
+     * "हे प्रमाणपत्र ३१ मार्च २०२१ पर्यंत वैध राहील."
+     * "सदरचा दाखला ... हे प्रमाणपत्र ३१/०३/२०२१ पर्यंत वैध राहील."
+     *
+     * Anchors on "हे प्रमाणपत्र" / "हे दाखला" / "सदरचा दाखला" and allows
+     * up to 20 chars of OCR noise between the anchor and the date.
+     * Accepts both Devanagari-digit dates (month-name or numeric) and ASCII-digit dates.
+     * Groups: (1)=day, (2)=month (Devanagari name), (3)=year  [month-name form]
+     *         (4)=day, (5)=month, (6)=year                    [numeric form]
+     */
+    private static final Pattern MARATHI_HE_PRAMANAPTR_SENTENCE = Pattern.compile(
+            "(?:हे|सदरचा|सदरील)\\s+(?:प्रमाणपत्र|दाखला)" +
+                    "[\\s\\S]{0,20}" +
+                    "(?:" +
+                    // Branch A: "DD MONTH YYYY"
+                    "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
+                    "|" +
+                    // Branch B: "DD/MM/YYYY"
+                    "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
+                    ")" +
+                    "\\s{0,15}(?:पर्यंत(?:च)?)" +
+                    "\\s{0,15}(?:वैध|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
+
     // ── HINDI EXPIRY PATTERNS ────────────────────────────────────────────────────
 
     private static final Pattern HINDI_TAK_MANYA_NUMERIC = Pattern.compile(
@@ -619,12 +502,30 @@ public class DocumentClassificationService {
             "(?:आगामी\\s+)?(\\d{1,2}|एक|दो|तीन|चार|पाँच)\\s+वर्षों?\\s+(?:के\\s+लिए|की\\s+अवधि\\s+के\\s+लिए)\\s+(?:मान्य|वैध)",
             Pattern.UNICODE_CHARACTER_CLASS);
 
+    /**
+     * FIX-R1 (PRIMARY FIX): Added negative lookahead to prevent matching the document TITLE
+     * "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" (income certificate for N years) as a
+     * relative validity expression. Without this guard, the pattern matched "३" from
+     * "३ वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" and used the issue date as base, producing
+     * a completely wrong expiry date (e.g., 18/08/2023 instead of 31/03/2021).
+     *
+     * The negative lookahead blocks matching when "वर्षांसाठी" is immediately followed
+     * (with optional whitespace) by income/certificate context words.
+     *
+     * Covers both OCR variants:
+     *   - Merged:   "वर्षांसाठीउत्पन्नाचे"   → blocked by lookahead (no space needed)
+     *   - Spaced:   "वर्षांसाठी उत्पन्नाचे"   → blocked by lookahead
+     *   - Genuine:  "वर्षांसाठी मान्य आहे।"   → passes through correctly
+     */
     private static final Pattern MARATHI_RELATIVE_VARSH = Pattern.compile(
-            "([०-९\\d]+)\\s*(?:वर्षांसाठी|वर्षासाठी|वर्षे\\s+साठी|वर्षाकरिता)",
-            Pattern.UNICODE_CHARACTER_CLASS);
+            "([०-९\\d]+)\\s*" +
+                    "(?:वर्षांसाठी|वर्षासाठी|वर्षे\\s+साठी|वर्षाकरिता)" +
+                    // FIX-R1: block if followed by income/certificate title context
+                    "(?!\\s*(?:उत्पन्न|प्रमाणपत्र|दाखला|आय|income))",
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     // ════════════════════════════════════════════════════════════════════════════
-    // EXPIRY KEYWORD LISTS — v6.0
+    // EXPIRY KEYWORD LISTS — v6.1
     // ════════════════════════════════════════════════════════════════════════════
 
     /** Marathi/Hindi keywords where date PRECEDES keyword. */
@@ -863,7 +764,7 @@ public class DocumentClassificationService {
 
         extractDates(text, data);
 
-        // Relative validity fallbacks
+        // Relative validity fallbacks — only fire if full pipeline found nothing
         if (!data.containsKey("expiryDate")) {
             String marathiRel = extractMarathiRelativeValidity(text, data);
             if (marathiRel != null && isPlausibleExpiryString(marathiRel)) {
@@ -886,6 +787,8 @@ public class DocumentClassificationService {
     // RELATIVE VALIDITY EXTRACTORS
     // ════════════════════════════════════════════════════════════════════════════
     private String extractMarathiRelativeValidity(String text, Map<String, String> existingData) {
+        // FIX-R1: MARATHI_RELATIVE_VARSH now has a negative lookahead that prevents
+        // "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" (income cert title) from matching.
         Matcher m = MARATHI_RELATIVE_VARSH.matcher(text);
         if (!m.find()) return null;
         try {
@@ -970,7 +873,7 @@ public class DocumentClassificationService {
     }
 
     // ════════════════════════════════════════════════════════════════════════════
-    // DATE EXTRACTION — v6.0 COMPLETE PIPELINE
+    // DATE EXTRACTION — v6.1 COMPLETE PIPELINE
     // ════════════════════════════════════════════════════════════════════════════
     private void extractDates(String text, Map<String, String> data) {
         List<DatePosition> allDates = new ArrayList<>();
@@ -1107,13 +1010,27 @@ public class DocumentClassificationService {
     // S-0: MARATHI DIRECT PATTERNS
     // ════════════════════════════════════════════════════════════════════════════
     private String extractExpiryMarathiDirect(String text) {
-        // M-0a: "DD मार्च YYYY पर्यंत वैध"
+        // M-0i: FIX-R3 — dedicated "हे प्रमाणपत्र ... DD MONTH YYYY पर्यंत वैध राहील" sentence
+        // Runs FIRST — highest specificity for income/caste certificates
+        Matcher hi = MARATHI_HE_PRAMANAPTR_SENTENCE.matcher(text);
+        while (hi.find()) {
+            String r = null;
+            if (hi.group(2) != null) {
+                // Branch A: month-name form
+                r = buildDevaMonthDate(hi.group(1), hi.group(2), hi.group(3));
+            } else if (hi.group(4) != null) {
+                // Branch B: numeric form
+                r = buildDevaNumericDate(hi.group(4), hi.group(5), hi.group(6));
+            }
+            if (r != null) { logger.info("✅ S-0 M-0i (हे प्रमाणपत्र sentence): {}", r); return r; }
+        }
+        // M-0a: "DD मार्च YYYY पर्यंत वैध" (FIX-R2: gaps widened to {0,15})
         Matcher m = MARATHI_PARYANT_VALID.matcher(text);
         while (m.find()) {
             String r = buildDevaMonthDate(m.group(1), m.group(2), m.group(3));
             if (r != null) { logger.info("✅ S-0 M-0a: {}", r); return r; }
         }
-        // M-0b: "DD/MM/YYYY पर्यंत वैध"
+        // M-0b: "DD/MM/YYYY पर्यंत वैध" (FIX-R2: gaps widened to {0,15})
         Matcher nb = MARATHI_PARYANT_NUMERIC.matcher(text);
         while (nb.find()) {
             String r = buildDevaNumericDate(nb.group(1), nb.group(2), nb.group(3));
@@ -1761,6 +1678,9 @@ public class DocumentClassificationService {
         if (original.contains("मुद्रांक") || original.contains("शुल्क")) s += 15;
         if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
         if (lower.contains("below poverty line") || original.contains("दारिद्र्यरेषा")) s += 20;
+        // FIX-R4: "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" title pattern
+        if (original.contains("वर्षांसाठी") && original.contains("उत्पन्नाचे")) s += 20;
+        if (original.contains("वर्षांसाठी") && original.contains("उत्पन्न"))    s += 15;
         return Math.min(130, s);
     }
 

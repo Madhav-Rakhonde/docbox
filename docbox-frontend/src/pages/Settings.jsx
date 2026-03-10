@@ -95,6 +95,12 @@ const Settings = () => {
     } finally { setLoadingProfile(false); }
   };
 
+  const formatPercentage = (p) => {
+    if (p == null) return 0;
+    if (p > 0 && p < 0.05) return '<0.1';
+    return p.toFixed(1);
+  };
+
   const loadStorageInfo = async () => {
     try {
       const r = await api.get('/users/stats');
@@ -393,7 +399,7 @@ const Settings = () => {
                       </Box>
                       <Box sx={{ px: 1.5, py: 0.5, borderRadius: '8px', background: '#6366F1' }}>
                         <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'white' }}>
-                          {(storageInfo.storagePercentage || 0).toFixed(1)}% Used
+                          {formatPercentage(storageInfo.storagePercentage)}% Used
                         </Typography>
                       </Box>
                     </Box>
