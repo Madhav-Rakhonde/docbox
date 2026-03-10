@@ -12,6 +12,7 @@ import {
 import { toast } from 'react-toastify';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import analyticsService from '../services/analyticsService';
 
 // ─── Sidebar nav item ───────────────────────────────────────────────────────
 const NavItem = ({ icon: Icon, label, id, active, onClick }) => (
@@ -96,16 +97,35 @@ const Settings = () => {
   };
 
   const formatPercentage = (p) => {
-    if (p == null) return 0;
-    if (p > 0 && p < 0.05) return '<0.1';
-    return p.toFixed(1);
+    if (p == null) return '0.00';
+    const num = Number(p);
+    if (isNaN(num)) return '0.00';
+    return num.toFixed(2);
+  };
+
+  const computePercentage = (used, limit) => {
+    if (!used || !limit) return 0;
+    return (used * 100.0) / limit;
   };
 
   const loadStorageInfo = async () => {
     try {
-      const r = await api.get('/users/stats');
-      if (r.data.success) setStorageInfo(r.data.data);
-    } catch { /* silent */ }
+      // use analytics endpoint directly to avoid any discrepancies with /users/stats
+      const r = await analyticsService.getDashboardStats();
+      if (r?.success) {
+        // pick only the storage-related fields
+        const d = r.data || {};
+        setStorageInfo({
+          storageUsedBytes: d.storageUsedBytes || 0,
+          storageLimitBytes: d.storageLimitBytes || (5 * 1024 * 1024 * 1024),
+          storagePercentage: d.storagePercentage || computePercentage(d.storageUsedBytes, d.storageLimitBytes),
+          totalDocuments: d.totalDocuments || 0,
+          totalFamilyMembers: d.totalFamilyMembers || 0,
+        });
+      }
+    } catch {
+      // ignore errors
+    }
   };
 
   const handleProfileChange = (e) => setProfileData({ ...profileData, [e.target.name]: e.target.value });

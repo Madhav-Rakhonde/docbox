@@ -165,10 +165,19 @@ const Dashboard = () => {
     return `${(mb / 1024).toFixed(2)} GB`;
   };
 
+  // convert ratio (0-100) to a nicely formatted string with two decimals
   const formatPercentage = (p) => {
-    if (p == null) return 0;
-    if (p > 0 && p < 0.05) return '<0.1';
-    return p.toFixed(1);
+    if (p == null) return '0.00';
+    // ensure numeric
+    const num = Number(p);
+    if (isNaN(num)) return '0.00';
+    return num.toFixed(2);
+  };
+
+  // compute percentage from used/limit bytes if available
+  const computePercentage = (used, limit) => {
+    if (!used || !limit) return 0;
+    return (used * 100.0) / limit;
   };
 
   const greeting = () => {
@@ -211,7 +220,7 @@ const Dashboard = () => {
           {
             title: 'Storage Used',
             value: formatBytes(stats?.storageUsedBytes),
-            subtitle: `${formatPercentage(stats?.storagePercentage)}% of your limit`,
+            subtitle: `${formatPercentage(computePercentage(stats?.storageUsedBytes, stats?.storageLimitBytes))}% of your limit`,
             icon: Storage,
             accent: '#3B82F6',
           },
