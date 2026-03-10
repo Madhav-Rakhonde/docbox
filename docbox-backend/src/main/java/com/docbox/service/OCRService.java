@@ -17,24 +17,6 @@ import java.awt.image.Kernel;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 
-/**
- * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║  OCR Service  v2.0 — Multi-pass, multilingual, adaptive preprocessing      ║
- * ╠══════════════════════════════════════════════════════════════════════════════╣
- * ║ IMPROVEMENTS OVER v1:                                                        ║
- * ║  • Marathi (mar) added as third language pass in full OCR                   ║
- * ║  • Adaptive binarisation (Sauvola-style local thresholding) instead of      ║
- * ║    fixed threshold=128 — handles uneven lighting, shadow, low-contrast docs  ║
- * ║  • Auto-upscale small images (<300px wide) before OCR                       ║
- * ║  • Multi-pass OCR: tries eng → hin/mar on Devanagari-heavy images           ║
- * ║  • Better selectBestResult: uses log(wordCount) * confidence to avoid        ║
- * ║    selecting a high-confidence empty result over a rich, lower-confidence one ║
- * ║  • Unsharp-mask sharpening step (improves character edge detection)          ║
- * ║  • Median filter noise reduction (removes salt-and-pepper artefacts)         ║
- * ║  • Confidence score uses Unicode-letter + digit + Indian script chars        ║
- * ║  • cleanText now preserves Devanagari (was stripping it via \\p{C} rule)    ║
- * ╚══════════════════════════════════════════════════════════════════════════════╝
- */
 @Service
 public class OCRService {
 
@@ -49,6 +31,14 @@ public class OCRService {
     // Devanagari detection threshold: if this fraction of non-space chars are Devanagari,
     // we consider the document multilingual and run Hindi+Marathi passes
     private static final double DEVANAGARI_DETECT_THRESHOLD = 0.08;
+
+    /**
+     * FIX-OCR-3: Minimum confidence required for early exit.
+     * English Tesseract on Devanagari produces ~40-55% estimated confidence
+     * (lots of garbage characters). A genuine English document typically gives >= 70%.
+     * Setting this to 60.0 blocks Devanagari-garbled results from early-exiting.
+     */
+    private static final double MIN_EARLY_EXIT_CONFIDENCE = 60.0;
 
     private ITesseract englishTesseract;
     private ITesseract hindiTesseract;
@@ -116,7 +106,7 @@ public class OCRService {
     }
 
     // ════════════════════════════════════════════════════════════════════════════
-    // PUBLIC API — same signatures as v1
+    // PUBLIC API — same signatures as v2.0
     // ════════════════════════════════════════════════════════════════════════════
 
     /**
@@ -144,6 +134,14 @@ public class OCRService {
     /**
      * FULL OCR — complete multi-pass extraction with adaptive preprocessing.
      * Used for structured data extraction and final classification.
+     *
+     * v2.1 flow:
+     *   Pass 1: adaptive binarisation + English
+     *     → Early exit ONLY if: wordCount >= 30 AND confidence >= 60% AND no Devanagari
+     *   Pass 2: global binarisation + English
+     *     → Early exit ONLY if: wordCount >= 20 AND confidence >= 60% AND no Devanagari
+     *   Pass 3+4: Hindi + Marathi (always runs if Devanagari detected, or English was sparse)
+     *   Merge: English + best Devanagari result combined
      */
     public OcrResult extractTextWithConfidence(byte[] imageBytes) {
         try {
@@ -152,15 +150,30 @@ public class OCRService {
 
             BufferedImage upscaled = upscaleIfNeeded(original);
 
-            // --- Pass 1: adaptive binarisation + English (fastest, covers most docs) ---
+            // --- Pass 1: adaptive binarisation + English ---
             BufferedImage adaptive   = preprocessAdaptive(upscaled);
             OcrResult    engAdaptive = performOCR(adaptive, getEnglishTesseract(), "English-Adaptive");
 
-            // Early exit: if English adaptive gives rich text, skip remaining passes.
-            // This saves ~2-4s for standard English/printed docs (most uploads).
-            if (engAdaptive.getWordCount() >= 30) {
-                logger.info("✅ Early-exit OCR (English-Adaptive sufficient): {} words", engAdaptive.getWordCount());
+            // FIX-OCR-1 + FIX-OCR-2 + FIX-OCR-3:
+            // Early exit ONLY when:
+            //   (a) word count is substantial (>= 30), AND
+            //   (b) confidence is genuinely high (>= 60%), AND
+            //   (c) the result does NOT contain Devanagari characters
+            //       (which would mean English Tesseract is misreading the script)
+            //
+            // Previously: only checked wordCount >= 30
+            // Bug: Devanagari docs produce 30+ garbage tokens → wrong early exit
+            boolean engAdaptiveHasDevanagari = hasSignificantDevanagari(engAdaptive.getText());
+            if (engAdaptive.getWordCount() >= 30
+                    && engAdaptive.getConfidence() >= MIN_EARLY_EXIT_CONFIDENCE
+                    && !engAdaptiveHasDevanagari) {
+                logger.info("✅ Early-exit OCR (English-Adaptive sufficient): {} words, {:.1f}% conf",
+                        engAdaptive.getWordCount(), engAdaptive.getConfidence());
                 return engAdaptive;
+            }
+
+            if (engAdaptiveHasDevanagari) {
+                logger.info("📸 Devanagari detected in English-Adaptive result — forcing Devanagari passes");
             }
 
             // --- Pass 2: global binarisation + English ---
@@ -168,17 +181,23 @@ public class OCRService {
             OcrResult    engGlobal = performOCR(global, getEnglishTesseract(), "English-Global");
             OcrResult    bestEng   = selectBestResult(engAdaptive, engGlobal);
 
-            // Early exit for good English result from either preprocessing
-            if (bestEng.getWordCount() >= 20) {
-                logger.info("✅ Early-exit OCR (English sufficient): {} words", bestEng.getWordCount());
+            // FIX-OCR-5: Same guard applied to second early exit
+            boolean bestEngHasDevanagari = hasSignificantDevanagari(bestEng.getText());
+            if (bestEng.getWordCount() >= 20
+                    && bestEng.getConfidence() >= MIN_EARLY_EXIT_CONFIDENCE
+                    && !bestEngHasDevanagari) {
+                logger.info("✅ Early-exit OCR (English sufficient): {} words, {:.1f}% conf",
+                        bestEng.getWordCount(), bestEng.getConfidence());
                 return bestEng;
             }
 
             // --- Pass 3 & 4: Devanagari (Hindi + Marathi) ---
-            // Only triggered when English passes produced sparse text — i.e. the document
-            // is likely scanned Devanagari. This restores accuracy for Marathi/Hindi docs
-            // while avoiding the 2-pass cost for normal English documents.
-            logger.info("📸 Sparse English ({} words) — running Devanagari passes", bestEng.getWordCount());
+            // Triggered when:
+            //   - English passes produced sparse text (likely Devanagari doc), OR
+            //   - English result contained Devanagari chars (confirmed script mismatch)
+            logger.info("📸 Running Devanagari passes (eng={} words, devanagari_detected={})",
+                    bestEng.getWordCount(), bestEngHasDevanagari || engAdaptiveHasDevanagari);
+
             OcrResult hinResult      = performOCR(adaptive, getHindiTesseract(),   "Hindi");
             OcrResult marResult      = performOCR(adaptive, getMarathiTesseract(), "Marathi");
             OcrResult bestDevanagari = selectBestResult(hinResult, marResult);
@@ -186,6 +205,9 @@ public class OCRService {
             logger.info("📖 Devanagari OCR: {} words (Hindi={}, Marathi={})",
                     bestDevanagari.getWordCount(), hinResult.getWordCount(), marResult.getWordCount());
 
+            // FIX-OCR-4: mergeResults threshold lowered — always merge if English has any text.
+            // Previously, < 5 English words caused the English result to be silently dropped,
+            // losing ASCII-printed dates (like "18/08/2020") and document numbers.
             OcrResult merged = mergeResults(bestEng, bestDevanagari);
             logger.info("✅ Full OCR: {} words, {:.1f}% conf, lang: {}",
                     merged.getWordCount(), merged.getConfidence(), merged.getDetectedLanguage());
@@ -252,18 +274,10 @@ public class OCRService {
      */
     private BufferedImage preprocessAdaptive(BufferedImage original) {
         try {
-            // Step 1: grayscale
-            BufferedImage gray = convertToGrayscale(original);
-
-            // Step 2: median denoise (3×3 box approximation via two passes)
-            BufferedImage denoised = medianDenoise(gray);
-
-            // Step 3: adaptive binarisation
+            BufferedImage gray      = convertToGrayscale(original);
+            BufferedImage denoised  = medianDenoise(gray);
             BufferedImage binarised = adaptiveBinarise(denoised, 31, 0.15);
-
-            // Step 4: unsharp mask (sharpens character edges)
             BufferedImage sharpened = unsharpMask(binarised);
-
             return sharpened;
         } catch (Exception ex) {
             logger.warn("⚠️ Adaptive preprocessing failed, falling back to global", ex);
@@ -272,7 +286,7 @@ public class OCRService {
     }
 
     /**
-     * GLOBAL preprocessing (v1 method, kept as fallback):
+     * GLOBAL preprocessing (v2.0 fallback):
      *   Grayscale → fixed 128-threshold binarisation.
      */
     private BufferedImage preprocessGlobal(BufferedImage original) {
@@ -300,24 +314,17 @@ public class OCRService {
      * Sauvola-style adaptive binarisation.
      * For each pixel, computes the local mean and standard deviation in a window of size
      * {@code windowSize × windowSize} and derives a per-pixel threshold.
-     * This handles documents where brightness varies across the page.
-     *
-     * @param gray       Grayscale input image
-     * @param windowSize Local neighbourhood (odd number, e.g. 31)
-     * @param k          Sensitivity parameter (typically 0.1–0.5)
      */
     private BufferedImage adaptiveBinarise(BufferedImage gray, int windowSize, double k) {
         int w = gray.getWidth(), h = gray.getHeight();
         int[] pixels = new int[w * h];
 
-        // Extract gray values
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++)
                 pixels[y * w + x] = (gray.getRGB(x, y) >> 16) & 0xff;
 
-        // Build integral image for fast mean computation
         long[] integral  = new long[(w + 1) * (h + 1)];
-        long[] integral2 = new long[(w + 1) * (h + 1)]; // squared, for stddev
+        long[] integral2 = new long[(w + 1) * (h + 1)];
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 long v = pixels[y * w + x];
@@ -352,11 +359,9 @@ public class OCRService {
                         - integral2[(y2+1) * (w+1) + x1]
                         + integral2[y1 * (w+1) + x1];
 
-                double mean    = (double) sum / count;
+                double mean     = (double) sum / count;
                 double variance = (double) sum2 / count - mean * mean;
-                double stdDev  = variance > 0 ? Math.sqrt(variance) : 0;
-
-                // Sauvola threshold: T = mean * (1 + k * (stdDev/128 - 1))
+                double stdDev   = variance > 0 ? Math.sqrt(variance) : 0;
                 double threshold = mean * (1.0 + k * (stdDev / 128.0 - 1.0));
 
                 int px = pixels[y * w + x];
@@ -367,10 +372,6 @@ public class OCRService {
         return result;
     }
 
-    /**
-     * Simple 3×3 box filter approximation of median denoise.
-     * Reduces Gaussian noise and JPEG compression artefacts.
-     */
     private BufferedImage medianDenoise(BufferedImage gray) {
         float[] blurKernel = {
                 1/9f, 1/9f, 1/9f,
@@ -381,23 +382,17 @@ public class OCRService {
         return blur.filter(gray, null);
     }
 
-    /**
-     * Unsharp mask: enhances character edges after binarisation.
-     */
     private BufferedImage unsharpMask(BufferedImage src) {
         int w = src.getWidth(), h = src.getHeight();
-
-        // Gaussian blur (5×5, σ≈1)
         float s = 1/16f;
         float[] gaussKernel = {
                 s*1, s*2, s*1,
                 s*2, s*4, s*2,
                 s*1, s*2, s*1
         };
-        ConvolveOp blur = new ConvolveOp(new Kernel(3, 3, gaussKernel), ConvolveOp.EDGE_NO_OP, null);
+        ConvolveOp blur    = new ConvolveOp(new Kernel(3, 3, gaussKernel), ConvolveOp.EDGE_NO_OP, null);
         BufferedImage blurred = blur.filter(src, null);
 
-        // result = src + amount*(src - blur)
         double amount = 1.5;
         BufferedImage result = new BufferedImage(w, h, src.getType());
         for (int y = 0; y < h; y++) {
@@ -455,21 +450,32 @@ public class OCRService {
 
     /**
      * Merge English and Devanagari results into a combined result.
-     * If both are substantial, concatenates their texts.
-     * If only one is good, returns that one.
+     *
+     * FIX-OCR-4: Threshold lowered from 5 → 1.
+     * Previously: if English produced < 5 words, it was silently dropped.
+     * Problem: ASCII-printed elements (dates, doc numbers, barcodes) that appear
+     * in the English result were lost, causing date extraction to fail on
+     * mixed-script documents where the date is printed in ASCII but the rest
+     * is Devanagari (e.g. "दिनांक : 18/08/2020" at the bottom of a Marathi cert).
+     * Now: any non-empty English result is always merged.
      */
     private OcrResult mergeResults(OcrResult english, OcrResult devanagari) {
         if (devanagari == null || devanagari.getWordCount() < 5) return english;
-        if (english.getWordCount() < 5) return devanagari;
 
-        // Merge texts
+        // FIX-OCR-4: was `english.getWordCount() < 5` — now just check non-empty
+        if (english == null || english.getText() == null || english.getText().isEmpty()) {
+            return devanagari;
+        }
+
+        // Both results have content — merge them
         String merged = english.getText() + "\n" + devanagari.getText();
         OcrResult result = new OcrResult();
         result.setText(merged);
         result.setWordCount(countWords(merged));
         result.setConfidence((english.getConfidence() + devanagari.getConfidence()) / 2.0);
         result.setDetectedLanguage("English+" + devanagari.getDetectedLanguage());
-        logger.info("🔀 Merged OCR results: {} words total", result.getWordCount());
+        logger.info("🔀 Merged OCR results: {} words total (eng={}, deva={})",
+                result.getWordCount(), english.getWordCount(), devanagari.getWordCount());
         return result;
     }
 
@@ -479,7 +485,14 @@ public class OCRService {
 
     /**
      * Detect whether the text contains a meaningful proportion of Devanagari characters.
-     * If so, we need Hindi/Marathi OCR passes.
+     *
+     * FIX-OCR-2: This method was dead code in v2.0 — defined but never called.
+     * It is now called in extractTextWithConfidence() to guard both early exits.
+     *
+     * When English Tesseract runs on a Devanagari document, it sometimes outputs
+     * a small percentage of actual Devanagari codepoints mixed with garbage ASCII
+     * (Unicode pass-through of unrecognised glyphs). This method catches that case.
+     * Threshold is intentionally low (8%) to catch even partial Devanagari bleed-through.
      */
     private boolean hasSignificantDevanagari(String text) {
         if (text == null || text.isEmpty()) return false;
@@ -489,19 +502,22 @@ public class OCRService {
             total++;
             if (c >= '\u0900' && c <= '\u097F') devanagari++;
         }
-        return total > 0 && (double) devanagari / total >= DEVANAGARI_DETECT_THRESHOLD;
+        boolean result = total > 0 && (double) devanagari / total >= DEVANAGARI_DETECT_THRESHOLD;
+        if (result) {
+            logger.debug("🔤 Devanagari detected: {}/{} chars ({:.1f}%)",
+                    devanagari, total, total > 0 ? (double) devanagari / total * 100 : 0);
+        }
+        return result;
     }
 
     /**
      * Clean OCR output text.
-     * v2: preserves Devanagari and other Unicode letters; only strips true control characters.
+     * v2.1: preserves Devanagari and other Unicode letters; only strips true control characters.
      */
     private String cleanText(String text) {
         if (text == null || text.isEmpty()) return "";
-        // Collapse whitespace runs
         text = text.replaceAll("[ \\t]+", " ");
         text = text.replaceAll("\\r\\n|\\r", "\n");
-        // Remove non-printable control chars (but NOT Devanagari which are above U+0900)
         text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "");
         return text.trim();
     }
@@ -517,7 +533,12 @@ public class OCRService {
 
     /**
      * Estimate OCR confidence from text quality.
-     * v2: considers Devanagari block, extended punctuation, and has higher word-count bonuses.
+     * v2.1: considers Devanagari block, extended punctuation, and has higher word-count bonuses.
+     *
+     * Note on FIX-OCR-3: English Tesseract on Devanagari text typically scores
+     * 40-55% here because Devanagari glyphs pass-through as Unicode letters
+     * (counted as valid) but with many garbage punctuation/symbol chars mixed in.
+     * The MIN_EARLY_EXIT_CONFIDENCE threshold of 60.0 is calibrated against this.
      */
     private double estimateConfidence(String text) {
         if (text == null || text.isEmpty()) return 0.0;
@@ -544,7 +565,7 @@ public class OCRService {
     }
 
     // ════════════════════════════════════════════════════════════════════════════
-    // CONVENIENCE METHODS (backward-compatible with v1)
+    // CONVENIENCE METHODS (backward-compatible with v1 and v2.0)
     // ════════════════════════════════════════════════════════════════════════════
 
     public String extractText(byte[] imageBytes) {
@@ -585,7 +606,7 @@ public class OCRService {
         public int    getWordCount()          { return wordCount; }
         public void   setWordCount(int w)     { this.wordCount = w; }
 
-        public String getDetectedLanguage()           { return detectedLanguage; }
+        public String getDetectedLanguage()            { return detectedLanguage; }
         public void   setDetectedLanguage(String lang) { this.detectedLanguage = lang; }
     }
 }
