@@ -60,7 +60,9 @@ RUN echo "=== Tesseract version ===" \
  && tesseract --version \
  && echo "=== Installed languages ===" \
  && tesseract --list-langs \
- && tesseract --list-langs 2>&1 | grep -E "^(eng|hin|mar)$" | wc -l | xargs -I{} sh -c \'[ {} -eq 3 ] && echo "✅ All 3 languages verified" || (echo "❌ MISSING LANGUAGES — expected eng hin mar" && exit 1)\'
+ && COUNT=$(tesseract --list-langs 2>&1 | grep -E "^(eng|hin|mar)$" | wc -l) \
+ && echo "Found $COUNT of 3 required languages" \
+ && [ "$COUNT" -eq 3 ] && echo "All 3 languages verified" || (echo "MISSING LANGUAGES — expected eng hin mar" && exit 1)
 
 # ── Set tessdata path env vars ─────────────────────────────────────────
 # TESSDATA_PREFIX: used by Tesseract CLI

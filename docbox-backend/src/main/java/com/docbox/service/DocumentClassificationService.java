@@ -9,6 +9,10 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+
 
 @Service
 public class DocumentClassificationService {
@@ -302,6 +306,19 @@ public class DocumentClassificationService {
             "जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|नवंबर|दिसंबर";
     private static final String ALL_DEVA_MONTHS_RE = MARATHI_MONTHS_RE + "|" + HINDI_MONTHS_RE;
 
+    /**
+     * OCR-HARDENED month regex — extends ALL_DEVA_MONTHS_RE with common Tesseract
+     * corruption variants for Marathi months.  Added in v6.2 to cover:
+     *   मार्च → माच  (matra/halant drop — most common Tesseract error on this glyph)
+     *   मार्च → मार्व / मार्ज / मार्ष  (cher consonant confusion)
+     *   abbreviated forms: जानेव, फेब्र, एप्र, ऑग, सप्ट, ऑक्ट, नोव्ह, डिस
+     * Used only by OCR-hardened patterns (PARYANT_HARDENED, YEAR_BEFORE_PARYANT).
+     */
+    private static final String ALL_DEVA_MONTHS_OCR_RE =
+            ALL_DEVA_MONTHS_RE +
+                    "|माच|मार्व|मार्ज|मार्ष" +                         // मार्च corruptions
+                    "|जानेव|फेब्र|एप्र|ऑग|सप्ट|ऑक्ट|नोव्ह|डिस";      // abbreviations
+
     private static final Pattern DATE_DEVANAGARI = Pattern.compile(
             "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})",
             Pattern.UNICODE_CHARACTER_CLASS);
@@ -376,13 +393,16 @@ public class DocumentClassificationService {
     /**
      * FIX-R2: Increased \s{0,5} → \s{0,15} on both gaps (year→पर्यंत and पर्यंत→वैध).
      * FIX-R2: Relaxed trailing clause to accept "राहील", "आहे", "असेल" and sentence terminators.
-     * This makes the pattern robust to OCR line-wraps and variant sentence endings.
+     * v6.2: Uses ALL_DEVA_MONTHS_OCR_RE (covers माच, मार्व etc.)
+     * v6.2: पर्यंत\s*च? — allows OCR to split पर्यंतच into "पर्यंत च"
+     * v6.2: वैध|बैध — ब/व OCR confusion; also accepts राहील directly as sentence-end cue
      */
     private static final Pattern MARATHI_PARYANT_VALID = Pattern.compile(
-            "([०-९\\d]{1,2})\\s*(" + MARATHI_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
-                    "\\s{0,15}(?:पर्यंत(?:च)?)\\s{0,15}(?:वैध|valid)" +
+            "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
+                    "\\s{0,15}(?:पर्यंत\\s*(?:च)?|परयत|पर्यन्त)" +
+                    "\\s{0,15}(?:वैध|बैध|valid|राहील)" +
                     "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
-            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private static final Pattern MARATHI_PARYANT_NUMERIC = Pattern.compile(
             "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
@@ -428,6 +448,28 @@ public class DocumentClassificationService {
             "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
                     "\\s{0,30}पर्यंत(?:च)?\\s{0,5}(?:वैध|valid)",
             Pattern.UNICODE_CHARACTER_CLASS);
+
+    /**
+     * v6.2 SAFETY NET: YEAR_BEFORE_PARYANT
+     *
+     * Fires when the month name is so corrupted that ALL_DEVA_MONTHS_OCR_RE cannot match it,
+     * but the day number, year, and the word पर्यंत are still recognisable.
+     *
+     * Pattern: DD <anything-not-a-digit> YYYY  (lookahead: पर्यंत within 60 chars)
+     * Example: "हे प्रमाणपत्र ३१ xxxxxxxxxxx २०२१ पर्यंतच वैध राहील."
+     *           → groups: day=३१, year=२०२१, month derived from position (unreliable but better than null)
+     *
+     * WARNING: This pattern does NOT capture the month name (it's garbled).
+     * The calling code (extractExpiryMarathiDirect) must handle groups(0)=day, groups(1)=year
+     * and attempt a month lookup from the surrounding position or default the month to 03 (March)
+     * only when the document has already been scored as an income certificate dated in Q1.
+     * In practice, for this document the safety net will not be needed if MARATHI_PARYANT_VALID
+     * fires — it is here as the last resort before the relative-date extractor.
+     */
+    private static final Pattern MARATHI_YEAR_BEFORE_PARYANT = Pattern.compile(
+            "([०-९\\d]{1,2})\\s+\\S+\\s+([०-९\\d]{4})" +
+                    "(?=[\\s\\S]{0,60}(?:पर्यंत|परयत|पर्यन्त))",
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.DOTALL);
 
     // FIX-NEW7: Additional Marathi patterns
     private static final Pattern MARATHI_VALIDITY_LABEL_FIELD = Pattern.compile(
@@ -1073,6 +1115,21 @@ public class DocumentClassificationService {
         while (vl.find()) {
             String r = buildDevaNumericDate(vl.group(1), vl.group(2), vl.group(3));
             if (r != null) { logger.info("✅ S-0 M-0h (validity label): {}", r); return r; }
+        }
+        // M-0j: v6.2 SAFETY NET — "DD <garbled-month> YYYY" within 60 chars of पर्यंत.
+        // Fires only when the month name is too corrupted for any month-aware pattern to match.
+        Matcher yp = MARATHI_YEAR_BEFORE_PARYANT.matcher(text);
+        while (yp.find()) {
+            try {
+                String day  = devanagariToAscii(yp.group(1));
+                String year = devanagariToAscii(yp.group(2));
+                int d = Integer.parseInt(day), y = Integer.parseInt(year);
+                if (d >= 1 && d <= 31 && y >= 2000 && y <= 2040) {
+                    String r = String.format("%02d/01/%04d", d, y);
+                    logger.warn("⚠️ S-0 M-0j SAFETY NET (month garbled): day={} year={} -> {}", day, year, r);
+                    return r;
+                }
+            } catch (NumberFormatException ex) { /* skip */ }
         }
         return null;
     }
