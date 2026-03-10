@@ -29,7 +29,8 @@ import {
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 
-const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api`;
+// API_BASE should point to the full API root. The .env value may already include `/api`.
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
 
 const PREVIEWABLE_TYPES = ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
 

@@ -44,7 +44,8 @@ import shareLinkService from '../../services/shareLinkService';
 import categoryService from '../../services/categoryService';
 import DocumentViewer from './DocumentViewer';
 
-const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api`;
+// API_BASE should point to the full API root. The .env value may already include `/api`.
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
 
 const DocumentDetails = ({ open, onClose, document: initialDocument, onUpdate, onDelete }) => {
   const [document, setDocument] = useState(initialDocument);
@@ -260,7 +261,7 @@ const DocumentDetails = ({ open, onClose, document: initialDocument, onUpdate, o
               >
                 {document.thumbnailPath ? (
                   <img
-                    src={`${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/documents/${document.id}/thumbnail`}
+                    src={`${API_BASE}/documents/${document.id}/thumbnail`}
                     alt="Thumbnail"
                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                   />
