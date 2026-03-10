@@ -478,19 +478,28 @@ public class DocumentClassificationService {
             Pattern.UNICODE_CHARACTER_CLASS);
 
     /**
-     * FIX-R3: NEW dedicated pattern for the canonical income/caste certificate sentence.
+     * FIX-R3 + BUG-DAY-FIX: Dedicated pattern for the canonical income/caste certificate sentence.
      * "हे प्रमाणपत्र ३१ मार्च २०२१ पर्यंत वैध राहील."
      * "सदरचा दाखला ... हे प्रमाणपत्र ३१/०३/२०२१ पर्यंत वैध राहील."
      *
-     * Anchors on "हे प्रमाणपत्र" / "हे दाखला" / "सदरचा दाखला" and allows
-     * up to 20 chars of OCR noise between the anchor and the date.
-     * Accepts both Devanagari-digit dates (month-name or numeric) and ASCII-digit dates.
+     * *** KEY FIX ***: Changed [\\s\\S]{0,20} to [\\s\\S]{0,20}? (NON-GREEDY)
+     *
+     * BUG: The greedy {0,20} quantifier was consuming Devanagari digit chars (e.g. "३")
+     * as part of the gap, leaving only "१" for the day capture group ([०-९\d]{1,2}).
+     * This caused "३१ मार्च २०२१" to be extracted as day="१" → "01/03/2021" instead
+     * of the correct "31/03/2021". The wrong-but-plausible date passed sanity checks
+     * and caused the pipeline to return early, never reaching MARATHI_PARYANT_VALID.
+     *
+     * FIX: Making the gap non-greedy ({0,20}?) causes the regex engine to try the
+     * SHORTEST possible gap first, so it stops before the day digit and the capture
+     * group correctly matches the full two-digit day "३१".
+     *
      * Groups: (1)=day, (2)=month (Devanagari name), (3)=year  [month-name form]
      *         (4)=day, (5)=month, (6)=year                    [numeric form]
      */
     private static final Pattern MARATHI_HE_PRAMANAPTR_SENTENCE = Pattern.compile(
             "(?:हे|सदरचा|सदरील)\\s+(?:प्रमाणपत्र|दाखला)" +
-                    "[\\s\\S]{0,20}" +
+                    "[\\s\\S]{0,20}?" +                               // ← NON-GREEDY (was {0,20})
                     "(?:" +
                     // Branch A: "DD MONTH YYYY"
                     "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
@@ -1052,8 +1061,9 @@ public class DocumentClassificationService {
     // S-0: MARATHI DIRECT PATTERNS
     // ════════════════════════════════════════════════════════════════════════════
     private String extractExpiryMarathiDirect(String text) {
-        // M-0i: FIX-R3 — dedicated "हे प्रमाणपत्र ... DD MONTH YYYY पर्यंत वैध राहील" sentence
+        // M-0i: FIX-R3 + BUG-DAY-FIX — dedicated "हे प्रमाणपत्र ... DD MONTH YYYY पर्यंत वैध राहील" sentence
         // Runs FIRST — highest specificity for income/caste certificates
+        // The {0,20}? non-greedy gap prevents consuming day digits
         Matcher hi = MARATHI_HE_PRAMANAPTR_SENTENCE.matcher(text);
         while (hi.find()) {
             String r = null;
