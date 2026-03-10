@@ -9,18 +9,18 @@ COPY src ./src
 RUN mvn clean package -DskipTests --no-transfer-progress
 
 # ──────────────────────────────────────────────────────────────────────
-# STAGE 2 — Runtime image with Tesseract OCR
-# Uses Ubuntu Jammy (NOT Alpine) — Tess4J requires glibc, not musl libc
+# STAGE 2 — Runtime image with Tesseract OCR + Devanagari languages
 # ──────────────────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre-jammy
 
 WORKDIR /app
 
+# ── System packages ───────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-eng \
-        tesseract-ocr-hin \
-        tesseract-ocr-mar \
+        wget \
+        ca-certificates \
         libtesseract-dev \
         libleptonica-dev \
         libpng-dev \
@@ -32,45 +32,65 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify Tesseract — visible in build logs
-RUN echo "=== Tesseract version ===" && tesseract --version \
- && echo "=== Installed languages ===" && tesseract --list-langs
-
-# ── Tesseract — find actual tessdata path dynamically ─────────────────
-# Ubuntu Jammy installs Tesseract 4.x tessdata at a versioned path.
-# We detect the real path at build time so it never breaks on upgrades.
+# ── Detect tessdata path at build time ───────────────────────────────
+# Ubuntu Jammy (Tesseract 4.x) installs to /usr/share/tesseract-ocr/4.00/tessdata
+# We detect it dynamically so this works even if the path changes.
 RUN TESSDATA=$(find /usr/share/tesseract-ocr -name "tessdata" -type d | head -1) \
- && echo "Detected tessdata: $TESSDATA" \
- && echo "TESSDATA_PATH=$TESSDATA" > /app/.tessdata_path
+ && echo "Detected tessdata directory: $TESSDATA" \
+ && echo "$TESSDATA" > /tmp/tessdata_path
 
+# ── Download hin + mar traineddata directly from GitHub ──────────────
+# Reason: tesseract-ocr-hin and tesseract-ocr-mar are in Ubuntu universe
+# repo which is sometimes unavailable or missing in container builds.
+# Downloading directly from the official Tesseract repo is more reliable.
+RUN TESSDATA=$(cat /tmp/tessdata_path) \
+ && echo "Installing Hindi traineddata to $TESSDATA" \
+ && wget -q --show-progress \
+        https://github.com/tesseract-ocr/tessdata/raw/main/hin.traineddata \
+        -O "$TESSDATA/hin.traineddata" \
+ && echo "Installing Marathi traineddata to $TESSDATA" \
+ && wget -q --show-progress \
+        https://github.com/tesseract-ocr/tessdata/raw/main/mar.traineddata \
+        -O "$TESSDATA/mar.traineddata" \
+ && echo "Download complete. Listing tessdata:" \
+ && ls -lh "$TESSDATA/"
+
+# ── Verify all required languages are recognised by Tesseract ─────────
+RUN echo "=== Tesseract version ===" \
+ && tesseract --version \
+ && echo "=== Installed languages ===" \
+ && tesseract --list-langs \
+ && tesseract --list-langs 2>&1 | grep -E "^(eng|hin|mar)$" | wc -l | xargs -I{} sh -c \'[ {} -eq 3 ] && echo "✅ All 3 languages verified" || (echo "❌ MISSING LANGUAGES — expected eng hin mar" && exit 1)\'
+
+# ── Set tessdata path env vars ─────────────────────────────────────────
+# TESSDATA_PREFIX: used by Tesseract CLI
+# APP_OCR_TESSERACT_DATA_PATH: read by OCRService @Value
+RUN TESSDATA=$(cat /tmp/tessdata_path) \
+ && echo "TESSDATA=$TESSDATA"
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
 ENV APP_OCR_TESSERACT_DATA_PATH=/usr/share/tesseract-ocr/4.00/tessdata
 
 # ── JVM flags ─────────────────────────────────────────────────────────
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Djava.awt.headless=true"
 
-# ── Cloudinary — MUST be declared so Render injects them at runtime ───
-# These are empty defaults; real values come from Render's Environment tab.
-# Without ENV declarations in a multi-stage Docker build, runtime env vars
-# from the host (Render) are not guaranteed to be visible to the JVM.
+# ── Cloudinary ────────────────────────────────────────────────────────
 ENV CLOUDINARY_CLOUD_NAME=""
 ENV CLOUDINARY_API_KEY=""
 ENV CLOUDINARY_API_SECRET=""
 ENV CLOUDINARY_URL=""
 
-# ── Spring datasource (declare so Render can inject) ──────────────────
+# ── Spring datasource ─────────────────────────────────────────────────
 ENV SPRING_DATASOURCE_URL=""
 ENV SPRING_DATASOURCE_USERNAME=""
 ENV SPRING_DATASOURCE_PASSWORD=""
 
-# ── JWT secret (declare so Render can inject) ─────────────────────────
+# ── JWT ───────────────────────────────────────────────────────────────
 ENV JWT_SECRET=""
 
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 8080
 
-# sh -c expands $JAVA_OPTS and passes all ENV vars to the JVM process
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS \
   -DCLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME} \
   -DCLOUDINARY_API_KEY=${CLOUDINARY_API_KEY} \
