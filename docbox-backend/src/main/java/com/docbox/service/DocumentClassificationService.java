@@ -477,41 +477,29 @@ public class DocumentClassificationService {
                     "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})",
             Pattern.UNICODE_CHARACTER_CLASS);
 
-    /**
-     * FIX-R3 + BUG-DAY-FIX: Dedicated pattern for the canonical income/caste certificate sentence.
-     * "हे प्रमाणपत्र ३१ मार्च २०२१ पर्यंत वैध राहील."
-     * "सदरचा दाखला ... हे प्रमाणपत्र ३१/०३/२०२१ पर्यंत वैध राहील."
-     *
-     * *** KEY FIX ***: Changed [\\s\\S]{0,20} to [\\s\\S]{0,20}? (NON-GREEDY)
-     *
-     * BUG: The greedy {0,20} quantifier was consuming Devanagari digit chars (e.g. "३")
-     * as part of the gap, leaving only "१" for the day capture group ([०-९\d]{1,2}).
-     * This caused "३१ मार्च २०२१" to be extracted as day="१" → "01/03/2021" instead
-     * of the correct "31/03/2021". The wrong-but-plausible date passed sanity checks
-     * and caused the pipeline to return early, never reaching MARATHI_PARYANT_VALID.
-     *
-     * FIX: Making the gap non-greedy ({0,20}?) causes the regex engine to try the
-     * SHORTEST possible gap first, so it stops before the day digit and the capture
-     * group correctly matches the full two-digit day "३१".
-     *
-     * Groups: (1)=day, (2)=month (Devanagari name), (3)=year  [month-name form]
-     *         (4)=day, (5)=month, (6)=year                    [numeric form]
-     */
+
     private static final Pattern MARATHI_HE_PRAMANAPTR_SENTENCE = Pattern.compile(
             "(?:हे|सदरचा|सदरील)\\s+(?:प्रमाणपत्र|दाखला)" +
-                    "[\\s\\S]{0,20}?" +                               // ← NON-GREEDY (was {0,20})
+                    "[\\s\\S]{0,120}?" +                              // FIX-GAP: was {0,20}?
                     "(?:" +
-                    // Branch A: "DD MONTH YYYY"
-                    "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
+                    // Branch A: "DD MONTH YYYY" — uses OCR-hardened month regex
+                    "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
                     "|" +
                     // Branch B: "DD/MM/YYYY"
                     "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
                     ")" +
                     "\\s{0,15}(?:पर्यंत(?:च)?)" +
-                    "\\s{0,15}(?:वैध|valid)" +
-                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
+                    "\\s{0,15}(?:वैध|बैध|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल|च)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
+
+    private static final Pattern MARATHI_PARYANTACH_DIRECT = Pattern.compile(
+            "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
+                    "\\s{0,15}पर्यंतच" +
+                    "\\s{0,15}(?:वैध|बैध|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
     // ── HINDI EXPIRY PATTERNS ────────────────────────────────────────────────────
 
     private static final Pattern HINDI_TAK_MANYA_NUMERIC = Pattern.compile(
@@ -1064,6 +1052,11 @@ public class DocumentClassificationService {
         // M-0i: FIX-R3 + BUG-DAY-FIX — dedicated "हे प्रमाणपत्र ... DD MONTH YYYY पर्यंत वैध राहील" sentence
         // Runs FIRST — highest specificity for income/caste certificates
         // The {0,20}? non-greedy gap prevents consuming day digits
+        Matcher pc = MARATHI_PARYANTACH_DIRECT.matcher(text);
+        while (pc.find()) {
+            String r = buildDevaMonthDate(pc.group(1), pc.group(2), pc.group(3));
+            if (r != null) { logger.info("✅ S-0 M-0pre (पर्यंतच direct): {}", r); return r; }
+        }
         Matcher hi = MARATHI_HE_PRAMANAPTR_SENTENCE.matcher(text);
         while (hi.find()) {
             String r = null;
@@ -1465,6 +1458,7 @@ public class DocumentClassificationService {
         DatePosition best = null;
         int bestScore = Integer.MIN_VALUE;
 
+        // Pass 1: prefer future dates (original logic)
         for (DatePosition dp : allDates) {
             LocalDate d = parseDate(dp.dateStr);
             if (d == null || !d.isAfter(today)) continue;
@@ -1473,11 +1467,31 @@ public class DocumentClassificationService {
             if (ctx > bestScore) { bestScore = ctx; best = dp; }
         }
 
-        // FIX-I: require ctx > 0 — at least one expiry keyword in vicinity
         if (best != null && bestScore > 0) {
-            logger.info("✅ S-9 heuristic (ctx={}): {}", bestScore, best.dateStr);
+            logger.info("✅ S-9 heuristic future (ctx={}): {}", bestScore, best.dateStr);
             return best.dateStr;
         }
+
+        // FIX-PAST: Pass 2 — also consider past dates with strong expiry-keyword context.
+        // Certificates already expired still have valid, extractable expiry dates.
+        // Require ctx >= 15 (at least one strong Devanagari expiry keyword in vicinity)
+        // to avoid picking issue dates or DOBs.
+        DatePosition bestPast = null;
+        int bestPastScore = Integer.MIN_VALUE;
+        for (DatePosition dp : allDates) {
+            LocalDate d = parseDate(dp.dateStr);
+            if (d == null) continue;
+            if (d.isAfter(today)) continue;                          // already handled above
+            if (d.getYear() < 2000 || d.getYear() > today.getYear()) continue;  // sanity
+            int ctx = computeContextScore(text, dp.position);
+            if (ctx > bestPastScore) { bestPastScore = ctx; bestPast = dp; }
+        }
+
+        if (bestPast != null && bestPastScore >= 15) {
+            logger.info("✅ S-9 heuristic past-expiry (ctx={}): {}", bestPastScore, bestPast.dateStr);
+            return bestPast.dateStr;
+        }
+
         return null;
     }
 
@@ -1489,6 +1503,18 @@ public class DocumentClassificationService {
         for (String kw : EXPIRY_KW_DATE_AFTER)  if (ctx.contains(kw)) score += 10;
         for (String kw : EXPIRY_KW_DATE_BEFORE) if (ctx.contains(kw)) score += 10;
         for (String kw : ISSUE_DATE_KEYWORDS)    if (ctx.contains(kw)) score -= 15;
+
+        // FIX-DEVA-CTX: score Devanagari expiry keywords so Marathi docs don't always score 0
+        String ctxRaw = text.substring(Math.max(0, pos - window), Math.min(text.length(), pos + window));
+        for (String kw : EXPIRY_KW_DATE_BEFORE)  if (ctxRaw.contains(kw)) score += 10;  // already Devanagari
+        if (ctxRaw.contains("पर्यंत"))  score += 15;
+        if (ctxRaw.contains("वैध"))      score += 15;
+        if (ctxRaw.contains("राहील"))    score += 10;
+        if (ctxRaw.contains("मुदत"))     score += 12;
+        if (ctxRaw.contains("दिनांक"))   score += 5;
+        // penalise issue-date context in Devanagari
+        if (ctxRaw.contains("दिनांक") && ctxRaw.contains("पासून")) score -= 10;
+
         return score;
     }
 
