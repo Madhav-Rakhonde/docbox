@@ -68,6 +68,21 @@ public class User {
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
+    // ── Notification Preferences ──────────────────────────────────────────
+    // Stored directly on the user row — no extra join needed.
+
+    @Column(name = "notif_email", nullable = false)
+    private Boolean notifEmail = true;
+
+    @Column(name = "notif_expiry_alerts", nullable = false)
+    private Boolean notifExpiryAlerts = true;
+
+    @Column(name = "notif_share", nullable = false)
+    private Boolean notifShare = true;
+
+    @Column(name = "notif_weekly_reports", nullable = false)
+    private Boolean notifWeeklyReports = false;
+
     // Helper methods
     public boolean isPrimaryAccount() {
         return this.role == UserRole.PRIMARY_ACCOUNT;

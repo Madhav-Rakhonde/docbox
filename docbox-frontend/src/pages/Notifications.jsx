@@ -16,14 +16,15 @@ import api from '../services/api';
 
 // ─── Icon + Color maps ─────────────────────────────────────────────────────
 const TYPE_CONFIG = {
-  DOCUMENT_UPLOADED:   { icon: Description,        color: '#10B981', bg: '#ECFDF5' },
-  DOCUMENT_UPDATED:    { icon: Description,        color: '#10B981', bg: '#ECFDF5' },
-  DOCUMENT_SHARED:     { icon: Share,              color: '#3B82F6', bg: '#EFF6FF' },
-  DOCUMENT_EXPIRING:   { icon: Warning,            color: '#F59E0B', bg: '#FFFBEB' },
-  FAMILY_MEMBER_ADDED: { icon: PersonAdd,          color: '#6366F1', bg: '#EEF2FF' },
-  PERMISSION_GRANTED:  { icon: CheckCircle,        color: '#10B981', bg: '#ECFDF5' },
-  SCHEME_DISCOVERY:    { icon: CardGiftcard,       color: '#10B981', bg: '#ECFDF5' },
-  DEFAULT:             { icon: Info,               color: '#3B82F6', bg: '#EFF6FF' },
+  DOCUMENT_UPLOADED:   { icon: Description,  color: '#10B981', bg: '#ECFDF5' },
+  DOCUMENT_UPDATED:    { icon: Description,  color: '#10B981', bg: '#ECFDF5' },
+  DOCUMENT_SHARED:     { icon: Share,        color: '#3B82F6', bg: '#EFF6FF' },
+  DOCUMENT_EXPIRING:   { icon: Warning,      color: '#F59E0B', bg: '#FFFBEB' },
+  DOCUMENT_EXPIRED:    { icon: Warning,      color: '#EF4444', bg: '#FEF2F2' },
+  FAMILY_MEMBER_ADDED: { icon: PersonAdd,    color: '#6366F1', bg: '#EEF2FF' },
+  PERMISSION_GRANTED:  { icon: CheckCircle,  color: '#10B981', bg: '#ECFDF5' },
+  SCHEME_DISCOVERY:    { icon: CardGiftcard, color: '#10B981', bg: '#ECFDF5' },
+  DEFAULT:             { icon: Info,         color: '#3B82F6', bg: '#EFF6FF' },
 };
 
 const getConfig = (type) => TYPE_CONFIG[type] || TYPE_CONFIG.DEFAULT;
@@ -43,9 +44,7 @@ const NotifRow = ({ notification, onMenuOpen, onClick }) => {
     <ListItem
       onClick={() => onClick(notification)}
       sx={{
-        px: 3,
-        py: 2,
-        cursor: 'pointer',
+        px: 3, py: 2, cursor: 'pointer',
         background: unread ? `${bg}88` : 'transparent',
         borderLeft: unread ? `3px solid ${color}` : '3px solid transparent',
         transition: 'background 150ms ease',
@@ -53,7 +52,8 @@ const NotifRow = ({ notification, onMenuOpen, onClick }) => {
         alignItems: 'flex-start',
       }}
       secondaryAction={
-        <IconButton size="small" onClick={(e) => { e.stopPropagation(); onMenuOpen(e, notification); }}
+        <IconButton size="small"
+          onClick={(e) => { e.stopPropagation(); onMenuOpen(e, notification); }}
           sx={{ color: '#94A3B8', mt: 0.5 }}>
           <MoreVert sx={{ fontSize: 18 }} />
         </IconButton>
@@ -92,10 +92,10 @@ const NotifRow = ({ notification, onMenuOpen, onClick }) => {
 
 // ─── Main Component ────────────────────────────────────────────────────────
 const Notifications = () => {
-  const [notifications, setNotifications]         = useState([]);
-  const [loading, setLoading]                     = useState(true);
-  const [tabValue, setTabValue]                   = useState(0);
-  const [anchorEl, setAnchorEl]                   = useState(null);
+  const [notifications, setNotifications]               = useState([]);
+  const [loading, setLoading]                           = useState(true);
+  const [tabValue, setTabValue]                         = useState(0);
+  const [anchorEl, setAnchorEl]                         = useState(null);
   const [selectedNotification, setSelectedNotification] = useState(null);
 
   useEffect(() => {
@@ -119,17 +119,31 @@ const Notifications = () => {
     }
   };
 
+  // ── Fires a custom event so Sidebar + TopBar update their badge instantly ──
+  const dispatchUnreadCount = (newNotifications) => {
+    const count = newNotifications.filter((n) => !n.isRead).length;
+    window.dispatchEvent(new CustomEvent('notif-unread-changed', { detail: { count } }));
+  };
+
   const handleMarkAsRead = async (id) => {
     try {
       await api.put(`/notifications/${id}/read`);
-      setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, isRead: true } : n));
+      setNotifications((prev) => {
+        const updated = prev.map((n) => n.id === id ? { ...n, isRead: true } : n);
+        dispatchUnreadCount(updated);
+        return updated;
+      });
     } catch { toast.error('Failed to mark as read'); }
   };
 
   const handleMarkAllAsRead = async () => {
     try {
       await api.put('/notifications/mark-all-read');
-      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      setNotifications((prev) => {
+        const updated = prev.map((n) => ({ ...n, isRead: true }));
+        dispatchUnreadCount(updated);
+        return updated;
+      });
       toast.success('All marked as read');
     } catch { toast.error('Failed'); }
   };
@@ -137,7 +151,11 @@ const Notifications = () => {
   const handleDelete = async (id) => {
     try {
       await api.delete(`/notifications/${id}`);
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      setNotifications((prev) => {
+        const updated = prev.filter((n) => n.id !== id);
+        dispatchUnreadCount(updated);
+        return updated;
+      });
       toast.success('Notification deleted');
       handleMenuClose();
     } catch { toast.error('Failed to delete'); }
@@ -148,24 +166,25 @@ const Notifications = () => {
     try {
       await api.delete('/notifications/clear-all');
       setNotifications([]);
+      dispatchUnreadCount([]);
       toast.success('Cleared');
     } catch { toast.error('Failed'); }
   };
 
-  const handleMenuOpen = (e, n) => { setAnchorEl(e.currentTarget); setSelectedNotification(n); };
-  const handleMenuClose = () => { setAnchorEl(null); setSelectedNotification(null); };
+  const handleMenuOpen  = (e, n) => { setAnchorEl(e.currentTarget); setSelectedNotification(n); };
+  const handleMenuClose = ()      => { setAnchorEl(null); setSelectedNotification(null); };
 
   const handleNotificationClick = (n) => {
     if (!n.isRead) handleMarkAsRead(n.id);
     if (n.link) window.location.href = n.link;
   };
 
-  const unreadCount  = notifications.filter((n) => !n.isRead).length;
-  const schemeCount  = notifications.filter((n) => n.type === 'SCHEME_DISCOVERY' && !n.isRead).length;
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const schemeCount = notifications.filter((n) => n.type === 'SCHEME_DISCOVERY' && !n.isRead).length;
 
   const filtered = notifications.filter((n) => {
     if (tabValue === 1) return !n.isRead;
-    if (tabValue === 2) return n.type === 'DOCUMENT_EXPIRING';
+    if (tabValue === 2) return n.type === 'DOCUMENT_EXPIRING' || n.type === 'DOCUMENT_EXPIRED';
     if (tabValue === 3) return n.type === 'DOCUMENT_SHARED';
     if (tabValue === 4) return n.type === 'SCHEME_DISCOVERY';
     return true;
@@ -173,7 +192,7 @@ const Notifications = () => {
 
   const TABS = [
     { label: 'All',     count: notifications.length, color: 'primary' },
-    { label: 'Unread',  count: unreadCount,           color: 'error' },
+    { label: 'Unread',  count: unreadCount,           color: 'error'   },
     { label: 'Expiry',  count: null },
     { label: 'Shared',  count: null },
     { label: 'Schemes', count: schemeCount,           color: 'success' },
@@ -192,30 +211,22 @@ const Notifications = () => {
             Notifications
           </Typography>
           <Typography sx={{ color: '#64748B', fontSize: '0.9rem' }}>
-            {unreadCount > 0 ? `${unreadCount} unread notification${unreadCount !== 1 ? 's' : ''}` : 'All caught up!'}
+            {unreadCount > 0
+              ? `${unreadCount} unread notification${unreadCount !== 1 ? 's' : ''}`
+              : 'All caught up!'}
           </Typography>
         </Box>
 
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <Button
-            variant="outlined"
-            startIcon={<DoneAll sx={{ fontSize: 16 }} />}
-            onClick={handleMarkAllAsRead}
-            disabled={unreadCount === 0}
-            size="small"
-            sx={{ borderRadius: '8px', borderColor: '#E2E8F0', color: '#475569', '&:hover': { borderColor: '#6366F1', color: '#6366F1', background: 'rgba(99,102,241,0.05)' } }}
-          >
+          <Button variant="outlined" startIcon={<DoneAll sx={{ fontSize: 16 }} />}
+            onClick={handleMarkAllAsRead} disabled={unreadCount === 0} size="small"
+            sx={{ borderRadius: '8px', borderColor: '#E2E8F0', color: '#475569',
+              '&:hover': { borderColor: '#6366F1', color: '#6366F1', background: 'rgba(99,102,241,0.05)' } }}>
             Mark all read
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={<DeleteOutline sx={{ fontSize: 16 }} />}
-            onClick={handleClearAll}
-            disabled={notifications.length === 0}
-            size="small"
-            color="error"
-            sx={{ borderRadius: '8px' }}
-          >
+          <Button variant="outlined" startIcon={<DeleteOutline sx={{ fontSize: 16 }} />}
+            onClick={handleClearAll} disabled={notifications.length === 0}
+            size="small" color="error" sx={{ borderRadius: '8px' }}>
             Clear all
           </Button>
         </Box>
@@ -223,11 +234,8 @@ const Notifications = () => {
 
       {/* Tab Bar */}
       <Paper elevation={0} sx={{ mb: 2.5, borderRadius: '14px', border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-        <Tabs
-          value={tabValue}
-          onChange={(_, v) => setTabValue(v)}
-          variant="scrollable"
-          scrollButtons="auto"
+        <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}
+          variant="scrollable" scrollButtons="auto"
           sx={{
             px: 1,
             '& .MuiTabs-indicator': { background: '#6366F1', borderRadius: 2, height: 2.5 },
@@ -236,14 +244,13 @@ const Notifications = () => {
               minHeight: 48, px: 2, color: '#64748B', letterSpacing: '0.02em',
               '&.Mui-selected': { color: '#6366F1' },
             },
-          }}
-        >
-          {TABS.map((tab, i) => (
-            <Tab
-              key={tab.label}
+          }}>
+          {TABS.map((tab) => (
+            <Tab key={tab.label}
               label={
                 tab.count != null && tab.count > 0
-                  ? <Badge badgeContent={tab.count} color={tab.color} sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
+                  ? <Badge badgeContent={tab.count} color={tab.color}
+                      sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
                       <Box sx={{ pr: 1.5 }}>{tab.label}</Box>
                     </Badge>
                   : tab.label
@@ -253,7 +260,7 @@ const Notifications = () => {
         </Tabs>
       </Paper>
 
-      {/* Notifications List */}
+      {/* List */}
       {loading && notifications.length === 0 ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
           <CircularProgress sx={{ color: '#6366F1' }} />
@@ -261,7 +268,8 @@ const Notifications = () => {
       ) : filtered.length === 0 ? (
         <Paper elevation={0} sx={{ borderRadius: '16px', border: '1px solid #E2E8F0' }}>
           <Box sx={{ py: 10, textAlign: 'center' }}>
-            <Box sx={{ width: 64, height: 64, borderRadius: '50%', background: '#F1F5F9', mx: 'auto', mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Box sx={{ width: 64, height: 64, borderRadius: '50%', background: '#F1F5F9',
+              mx: 'auto', mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <NotificationsIcon sx={{ fontSize: 28, color: '#94A3B8' }} />
             </Box>
             <Typography sx={{ fontWeight: 700, color: '#0F172A', mb: 0.5 }}>No notifications</Typography>
@@ -277,11 +285,7 @@ const Notifications = () => {
           <List disablePadding>
             {filtered.map((notif, index) => (
               <React.Fragment key={notif.id}>
-                <NotifRow
-                  notification={notif}
-                  onMenuOpen={handleMenuOpen}
-                  onClick={handleNotificationClick}
-                />
+                <NotifRow notification={notif} onMenuOpen={handleMenuOpen} onClick={handleNotificationClick} />
                 {index < filtered.length - 1 && <Divider sx={{ mx: 3, borderColor: '#F1F5F9' }} />}
               </React.Fragment>
             ))}
@@ -290,12 +294,8 @@ const Notifications = () => {
       )}
 
       {/* Context Menu */}
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={handleMenuClose}
-        PaperProps={{ elevation: 3, sx: { borderRadius: '10px', border: '1px solid #E2E8F0', minWidth: 160 } }}
-      >
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}
+        PaperProps={{ elevation: 3, sx: { borderRadius: '10px', border: '1px solid #E2E8F0', minWidth: 160 } }}>
         {selectedNotification && !selectedNotification.isRead && (
           <MenuItem onClick={() => { handleMarkAsRead(selectedNotification.id); handleMenuClose(); }}
             sx={{ fontSize: '0.875rem', gap: 1.5, borderRadius: '6px', mx: 0.5 }}>

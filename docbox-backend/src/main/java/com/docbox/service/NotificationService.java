@@ -680,4 +680,50 @@ public class NotificationService {
 
         return stats;
     }
+
+    // ============================================
+    // NOTIFICATION SETTINGS (per-user persistence)
+    // ============================================
+
+    /**
+     * Get notification settings for the current user directly from the User entity.
+     * Defaults are defined on the User columns (true/true/true/false).
+     */
+    public Map<String, Object> getUserNotificationSettings() {
+        Long userId = SecurityUtils.getCurrentUserId();
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("emailNotifications", Boolean.TRUE.equals(user.getNotifEmail()));
+        result.put("expiryAlerts",       Boolean.TRUE.equals(user.getNotifExpiryAlerts()));
+        result.put("shareNotifications", Boolean.TRUE.equals(user.getNotifShare()));
+        result.put("weeklyReports",      Boolean.TRUE.equals(user.getNotifWeeklyReports()));
+        return result;
+    }
+
+    /**
+     * Persist notification settings for the current user directly on the User row.
+     * Partial updates supported — only keys present in the map are changed.
+     */
+    @Transactional
+    public Map<String, Object> updateUserNotificationSettings(Map<String, Boolean> updates) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
+
+        if (updates.containsKey("emailNotifications"))
+            user.setNotifEmail(updates.get("emailNotifications"));
+        if (updates.containsKey("expiryAlerts"))
+            user.setNotifExpiryAlerts(updates.get("expiryAlerts"));
+        if (updates.containsKey("shareNotifications"))
+            user.setNotifShare(updates.get("shareNotifications"));
+        if (updates.containsKey("weeklyReports"))
+            user.setNotifWeeklyReports(updates.get("weeklyReports"));
+
+        userRepository.save(user);
+        logger.info("Updated notification settings for user {}: {}", userId, updates);
+
+        return getUserNotificationSettings();
+    }
 }

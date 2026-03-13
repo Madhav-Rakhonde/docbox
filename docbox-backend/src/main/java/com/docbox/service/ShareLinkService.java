@@ -70,7 +70,7 @@ public class ShareLinkService {
         permissionService.requirePermission(documentId,
                 PermissionLevel.VIEW_DOWNLOAD_SHARE, "share");
 
-        Document document = documentRepository.findById(documentId)
+        Document document = documentRepository.findByIdWithCategory(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document", "id", documentId));
 
         User createdBy = userRepository.findById(currentUserId)

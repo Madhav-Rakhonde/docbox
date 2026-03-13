@@ -180,11 +180,39 @@ public class DocumentService {
 
         // Expiry date
         if (manualExpiryDate != null) {
+            // User explicitly provided a date — always use it
             document.setExpiryDate(manualExpiryDate);
-        } else if (extractedText != null) {
-            LocalDate autoExpiry = parseExpiryDate(extractedText);
-            if (autoExpiry != null && isPlausibleExpiry(autoExpiry)) {
-                document.setExpiryDate(autoExpiry);
+
+        } else if (extractedText != null && !extractedText.isBlank()) {
+            // Run the full structured-data pipeline (OCR → classification → expiry).
+            //
+            // BUG FIX: the old code called parseExpiryDate(extractedText) directly,
+            // which passed the entire raw OCR dump to the date parser — causing the
+            // "Could not parse expiry date '<full OCR text>'" WARN on every upload.
+            //
+            // Correct flow:
+            //   1. extractStructuredData() runs classification-aware expiry detection
+            //      (Marathi sentence patterns, Hindi patterns, English labeled fields,
+            //      the Income Certificate 31-March derived rule, etc.)
+            //   2. The result map contains "expiryDate" as a clean "dd/MM/yyyy" string
+            //      — or nothing at all if no expiry was found.
+            //   3. parseExpiryDate() is only called on that short, clean string.
+            Map<String, String> structured =
+                    classificationService.extractStructuredData(extractedText, category.getName());
+
+            String expiryStr = structured.get("expiryDate");   // null when not found — never the full OCR
+            if (expiryStr != null && !expiryStr.isBlank()) {
+                LocalDate autoExpiry = parseExpiryDate(expiryStr);
+                if (autoExpiry != null && isPlausibleExpiry(autoExpiry)) {
+                    document.setExpiryDate(autoExpiry);
+                    logger.info("Auto-expiry set to {} (from structured data, category={})",
+                            autoExpiry, category.getName());
+                } else {
+                    logger.warn("Structured expiry '{}' failed parse/plausibility check — skipped",
+                            expiryStr);
+                }
+            } else {
+                logger.debug("No expiry date found in structured data for category={}", category.getName());
             }
         }
 

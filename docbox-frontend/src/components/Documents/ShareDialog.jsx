@@ -150,7 +150,6 @@ const ShareDialog = ({ open, onClose, document, onSuccess }) => {
               }} />
 
             <Box sx={{ p: 2, borderRadius: '12px', background: '#F8F9FC', border: '1px solid #E2E8F0' }}>
-              <InfoRow label="Token"   value={shareLink.linkToken} />
               <InfoRow label="Expires" value={new Date(shareLink.expiresAt).toLocaleString()} />
               {formData.maxViews && <InfoRow label="Max Views" value={formData.maxViews} />}
               <Typography sx={{ fontSize: '0.75rem', color: '#94A3B8', mt: 1 }}>

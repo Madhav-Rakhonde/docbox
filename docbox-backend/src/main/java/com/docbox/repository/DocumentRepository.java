@@ -44,6 +44,9 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     Optional<Document> findByStoredFilename(String storedFilename);
 
+    @Query("SELECT d FROM Document d JOIN FETCH d.category LEFT JOIN FETCH d.familyMember LEFT JOIN FETCH d.user WHERE d.id = :id")
+    Optional<Document> findByIdWithCategory(@Param("id") Long id);
+
     // ========================================
     // ARCHIVED QUERIES
     // ========================================
@@ -263,4 +266,14 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     long countByUserId(Long userId);
 
     List<Document> findByUserId(Long userId);
+
+    // ADD to DocumentRepository.java — required by NotificationService.isDocumentRenewed()
+
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.category " +
+            "WHERE d.user.id = :userId " +
+            "AND d.category.id = :categoryId " +
+            "AND d.isArchived = false")
+    List<Document> findByUserIdAndCategoryId(@Param("userId") Long userId,
+                                             @Param("categoryId") Long categoryId);
+
 }

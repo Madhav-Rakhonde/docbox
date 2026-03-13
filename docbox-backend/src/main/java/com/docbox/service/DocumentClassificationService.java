@@ -301,7 +301,7 @@ public class DocumentClassificationService {
 
     // Devanagari month strings
     private static final String MARATHI_MONTHS_RE =
-            "जानेवारी|फेब्रुवारी|मार्च|एप्रिल|मे|जून|जुलै|ऑगस्ट|सप्टेंबर|ऑक्टोबर|नोव्हेंबर|डिसेंबर";
+            "जानेवारी|फेब्रुवारी|मार्च|माच|एप्रिल|मे|जून|जुलै|ऑगस्ट|सप्टेंबर|ऑक्टोबर|नोव्हेंबर|डिसेंबर";
     private static final String HINDI_MONTHS_RE =
             "जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|नवंबर|दिसंबर";
     private static final String ALL_DEVA_MONTHS_RE = MARATHI_MONTHS_RE + "|" + HINDI_MONTHS_RE;
@@ -472,7 +472,7 @@ public class DocumentClassificationService {
                     // Branch B: "DD/MM/YYYY"
                     "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
                     ")" +
-                    "\\s{0,15}(?:पर्यंत(?:च)?)" +
+                    "\\s{0,15}(?:पर्यंत(?:च)?|पय\\s*तच|पयतच|पय\\u0902तच|पयं\\s*तच)" +
                     "\\s{0,15}(?:वैध|बैध|वैच|valid)" +
                     "(?:\\s+(?:राहील|आहे|असेल|च)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
@@ -483,6 +483,28 @@ public class DocumentClassificationService {
                     "\\s{0,15}(?:वैध|बैध|वैच|valid)" +
                     "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
+    /**
+     * FIX-PDF: Handles PDF embedded-text glyph-strip corruption of पर्यंतच.
+     * When PDFs are processed via text extraction (not OCR), the Devanagari
+     * conjunct glyphs are stripped: पर्यंतच → पय तच / पयतच / पयंतच.
+     * This pattern catches all variants.
+     */
+    private static final Pattern MARATHI_PARYANTACH_PDF = Pattern.compile(
+            "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
+                    "\\s{0,20}(?:पर्यंतच|पय\\s*तच|पयतच|पय\\u0902तच|पयं\\s*तच)" +
+                    "\\s{0,15}(?:वैध|बैध|वैच|valid)" +
+                    "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
+            Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
+    /**
+     * FIX-INCOME: Matches MahaOnline income certificate footer.
+     * Format: "Printed By ­OMTID : VLE Name :... Date:03/10/2025 1:03PM"
+     * Expiry rule: 31 March of the year AFTER the print date year.
+     */
+    private static final Pattern INCOME_CERT_PRINTED_DATE = Pattern.compile(
+            "(?i)(?:Printed\\s+By[^\\n]{0,80}?Date|\\bDate)\\s*[:\\-]\\s*" +
+                    "(0?[1-9]|[12]\\d|3[01])/(0?[1-9]|1[0-2])/((?:19|20)\\d{2})" +
+                    "(?:\\s+\\d{1,2}:\\d{2}(?:AM|PM)?)?",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
     // ── HINDI EXPIRY PATTERNS ────────────────────────────────────────────────────
 
     private static final Pattern HINDI_TAK_MANYA_NUMERIC = Pattern.compile(
@@ -550,12 +572,18 @@ public class DocumentClassificationService {
             "तक वैध",
             "तक मान्य है",
             "तक मान्य",
-            // FIX-A: वैच variants — Tesseract ध→च glyph confusion on this document
+            // FIX-A: वैच variants (Tesseract ध→च corruption)
             "पर्यंतच वैच राहील",
             "पर्यंत वैच राहील",
             "पर्यंतच वैच",
             "पर्यंत वैच",
-            "वैच राहील"
+            "वैच राहील",
+            // FIX-PDF: PDF glyph-strip corruption of पर्यंतच → पय तच
+            "पय तच वैध राहील",
+            "पय तच वैच राहील",
+            "पय तच वैध",
+            "पयतच वैध राहील",
+            "पयतच वैध"
     );
 
     /** Marathi/Hindi label keywords where date FOLLOWS (after colon/space). */
@@ -632,6 +660,8 @@ public class DocumentClassificationService {
     private static final Map<String, String> MONTH_MAP = new LinkedHashMap<>();
     static {
         MONTH_MAP.put("january","01");   MONTH_MAP.put("february","02");
+        // In the MONTH_MAP static block, add:
+        MONTH_MAP.put("माच", "03");   // FIX-PDF: PDF glyph-strip of मार्च
         MONTH_MAP.put("march","03");     MONTH_MAP.put("april","04");
         MONTH_MAP.put("may","05");       MONTH_MAP.put("june","06");
         MONTH_MAP.put("july","07");      MONTH_MAP.put("august","08");
@@ -763,11 +793,12 @@ public class DocumentClassificationService {
         if (text == null || text.isEmpty()) return data;
 
         switch (category) {
-            case "Aadhaar Card":    extractAadhaarData(text, data);   break;
-            case "PAN Card":        extractPANData(text, data);       break;
-            case "Passport":        extractPassportData(text, data);  break;
-            case "Driving License": extractDLData(text, data);        break;
-            case "Voter ID":        extractVoterIDNumber(text, data); break;
+            case "Aadhaar Card":         extractAadhaarData(text, data);             break;
+            case "PAN Card":             extractPANData(text, data);                 break;
+            case "Passport":             extractPassportData(text, data);            break;
+            case "Driving License":      extractDLData(text, data);                  break;
+            case "Voter ID":             extractVoterIDNumber(text, data);           break;
+            case "Income Certificate":   extractIncomeCertificateExpiry(text, data); break; // ← ADDED
             default: break;
         }
 
@@ -944,9 +975,21 @@ public class DocumentClassificationService {
 
         for (int i = 0; i < unique.size() && i < 5; i++)
             data.put("date" + (i + 1), unique.get(i).dateStr);
-        if (unique.isEmpty()) return;
 
-        // ── Expiry pipeline — ordered from most specific to most general ──
+        // Early-exit path: no dates parsed from text at all.
+        // S-INCOME still applies here — a scanned Income Cert footer may be the
+        // only date-bearing line yet yield no parseable dates via the generic
+        // collectors (e.g. the timestamp "1:03PM" confuses some patterns).
+        if (unique.isEmpty()) {
+            if (data.containsKey("incomeCertDerivedExpiry")) {
+                data.put("expiryDate", data.remove("incomeCertDerivedExpiry"));
+                logger.info("📅 S-INCOME derived expiry (no other dates in text): {}",
+                        data.get("expiryDate"));
+            }
+            return;
+        }
+
+        // ── Expiry pipeline — ordered from most specific to most general ──────
         String expiry = null;
 
         // S-0: Marathi direct patterns — highest priority (script-native)
@@ -986,14 +1029,37 @@ public class DocumentClassificationService {
         // S-8: Relative expiry "valid for N years/months"
         if (expiry == null) expiry = extractRelativeExpiry(text, unique);
 
+        // S-INCOME: Income Certificate 31-March rule.
+        // ─────────────────────────────────────────────────────────────────────
+        // MUST run BEFORE S-9. Without this guard, S-9 (extractLatestFutureDate)
+        // picks up the MahaOnline footer print-date (e.g. "Date:03/10/2025") as
+        // a "future date", assigns it a non-negative context score, and wins —
+        // so the derived expiry "31/03/2026" never gets used.
+        //
+        // S-0…S-8 are all structurally explicit (labeled fields, script-native
+        // sentences, period ranges). If none of them matched, it means the cert
+        // carries NO explicit expiry text — only the issue date in the footer.
+        // In that case the derived 31-March date IS the correct expiry and must
+        // take precedence over the generic heuristic.
+        // ─────────────────────────────────────────────────────────────────────
+        if (expiry == null && data.containsKey("incomeCertDerivedExpiry")) {
+            expiry = data.remove("incomeCertDerivedExpiry");
+            logger.info("📅 S-INCOME derived expiry (31 March rule, before S-9): {}", expiry);
+        }
+
         // S-9: Heuristic — context-scored latest future date (last resort)
         // FIX-I: Require score > 0 (not >= 0) to prevent false positives
         if (expiry == null) expiry = extractLatestFutureDate(text, unique);
 
+        // Always clean up the temp key regardless of which path was taken
+        data.remove("incomeCertDerivedExpiry");
+
         if (expiry != null) {
             if (isPlausibleExpiryString(expiry)) {
-                data.put("expiryDate", expiry);
-                logger.info("📅 Final expiry: {}", expiry);
+                if (!data.containsKey("expiryDate")) {
+                    data.put("expiryDate", expiry);
+                    logger.info("📅 Final expiry: {}", expiry);
+                }
             } else {
                 logger.warn("⚠️ Expiry '{}' failed sanity check — discarded", expiry);
             }
@@ -1015,13 +1081,33 @@ public class DocumentClassificationService {
         }
     }
 
+    private static final Pattern INCOME_CERT_ISSUE_DATE = Pattern.compile(
+            "(?i)" +
+                    // Optional MahaOnline prefix up to 120 chars, ending with the word "Date"
+                    "(?:Printed\\s+By[^\\n]{0,120}?\\bDate|\\bDate)" +
+                    // Separator: colon with optional surrounding spaces, or just colon
+                    "\\s*[:\\-]\\s*" +
+                    // DD/MM/YYYY  — groups 1, 2, 3
+                    "(0?[1-9]|[12]\\d|3[01])/(0?[1-9]|1[0-2])/((?:19|20)\\d{2})" +
+                    // Optional time component — ignored
+                    "(?:\\s+\\d{1,2}:\\d{2}(?:AM|PM)?)?",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS
+    );
+
+
+
+
     // ════════════════════════════════════════════════════════════════════════════
     // S-0: MARATHI DIRECT PATTERNS
     // ════════════════════════════════════════════════════════════════════════════
     private String extractExpiryMarathiDirect(String text) {
-        // M-0i: FIX-R3 + BUG-DAY-FIX — dedicated "हे प्रमाणपत्र ... DD MONTH YYYY पर्यंत वैध राहील" sentence
-        // Runs FIRST — highest specificity for income/caste certificates
-        // The {0,20}? non-greedy gap prevents consuming day digits
+
+
+        Matcher pdf = MARATHI_PARYANTACH_PDF.matcher(text);
+        while (pdf.find()) {
+            String r = buildDevaMonthDate(pdf.group(1), pdf.group(2), pdf.group(3));
+            if (r != null) { logger.info("✅ S-0 M-0pre-PDF (पय तच PDF strip): {}", r); return r; }
+        }
         Matcher pc = MARATHI_PARYANTACH_DIRECT.matcher(text);
         while (pc.find()) {
             String r = buildDevaMonthDate(pc.group(1), pc.group(2), pc.group(3));
@@ -2068,7 +2154,38 @@ public class DocumentClassificationService {
         Matcher mb = VOTER_ID_BARE.matcher(text);
         if (mb.find()) put(data, "voterIdNumber", mb.group());
     }
+    private void extractIncomeCertificateExpiry(String text, Map<String, String> data) {
+        Matcher pm = INCOME_CERT_ISSUE_DATE.matcher(text);
+        if (!pm.find()) {
+            // Log at DEBUG so we know the pattern didn't match (not an error —
+            // some Income Certs carry an explicit Marathi validity sentence).
+            System.out.println("[DEBUG] IncomeCert — no MahaOnline footer date found; "
+                    + "will rely on S-0…S-9 or Marathi sentence patterns.");
+            return;
+        }
 
+        try {
+            int day   = Integer.parseInt(pm.group(1).trim());
+            int month = Integer.parseInt(pm.group(2).trim());
+            int year  = Integer.parseInt(pm.group(3).trim());
+
+            // Store print date for audit / downstream use
+            data.put("issuePrintDate", String.format("%02d/%02d/%d", day, month, year));
+
+            // Maharashtra government rule: Income Certificate is valid until
+            // 31 March of the NEXT financial year.
+            String derived = String.format("31/03/%d", year + 1);
+            data.put("incomeCertDerivedExpiry", derived);
+
+            System.out.println("[INFO] IncomeCert print date: "
+                    + day + "/" + month + "/" + year
+                    + " → derived expiry: " + derived);
+
+        } catch (NumberFormatException e) {
+            System.out.println("[WARN] IncomeCert print date parse failed for match: '"
+                    + pm.group() + "'");
+        }
+    }
     // ════════════════════════════════════════════════════════════════════════════
     // UTILITIES
     // ════════════════════════════════════════════════════════════════════════════
@@ -2105,4 +2222,28 @@ public class DocumentClassificationService {
                 .limit(5)
                 .forEach(e -> logger.info("  {} = {}", e.getKey(), e.getValue()));
     }
+    public static String computeIncomeCertExpiry(String ocrText) {
+        if (ocrText == null || ocrText.isEmpty()) return null;
+
+        Matcher m = INCOME_CERT_ISSUE_DATE.matcher(ocrText);
+        if (!m.find()) return null;
+
+        try {
+            int year = Integer.parseInt(m.group(3).trim());
+            // Sanity check — reject obviously wrong years
+            if (year < 2000 || year > 2099) return null;
+            return String.format("31/03/%d", year + 1);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+
+    public static LocalDate computeIncomeCertExpiryAsDate(String ocrText) {
+        String ds = computeIncomeCertExpiry(ocrText);
+        if (ds == null) return null;
+        // ds is always "31/03/YYYY"
+        return LocalDate.parse(ds, DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+    }
+
 }
