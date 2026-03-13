@@ -41,7 +41,11 @@ public class Document {
     @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
     private FamilyMember familyMember; // Who this document belongs to
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    // FIX: Changed from FetchType.LAZY to FetchType.EAGER
+    // Category is always needed when a document is loaded/serialized.
+    // LAZY caused "could not initialize proxy [DocumentCategory#x] - no Session"
+    // because the Hibernate session was closed before JSON serialization occurred.
+    @ManyToOne(fetch = FetchType.EAGER, optional = false)
     @JoinColumn(name = "category_id", nullable = false)
     @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
     private DocumentCategory category;
