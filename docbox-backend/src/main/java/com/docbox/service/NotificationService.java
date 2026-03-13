@@ -19,9 +19,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.scheduling.annotation.Scheduled;
 
 /**
  * Notification Service
@@ -682,12 +684,13 @@ public class NotificationService {
     }
 
     // ============================================
-    // NOTIFICATION SETTINGS (per-user persistence)
+    // NOTIFICATION SETTINGS (stored on User row)
     // ============================================
 
     /**
-     * Get notification settings for the current user directly from the User entity.
-     * Defaults are defined on the User columns (true/true/true/false).
+     * Get notification preference toggles for the current user.
+     * Column defaults: emailNotifications=true, expiryAlerts=true,
+     *                  shareNotifications=true, weeklyReports=false
      */
     public Map<String, Object> getUserNotificationSettings() {
         Long userId = SecurityUtils.getCurrentUserId();
@@ -703,8 +706,8 @@ public class NotificationService {
     }
 
     /**
-     * Persist notification settings for the current user directly on the User row.
-     * Partial updates supported — only keys present in the map are changed.
+     * Persist notification preference toggles for the current user.
+     * Partial-update friendly — only keys present in the map are changed.
      */
     @Transactional
     public Map<String, Object> updateUserNotificationSettings(Map<String, Boolean> updates) {
@@ -723,7 +726,160 @@ public class NotificationService {
 
         userRepository.save(user);
         logger.info("Updated notification settings for user {}: {}", userId, updates);
-
         return getUserNotificationSettings();
+    }
+
+    // ============================================
+    // SCHEDULED EXPIRY NOTIFICATIONS
+    // ============================================
+
+    /**
+     * Daily job — runs at 09:00 AM every day.
+     *
+     * Logic per user (PRIMARY_ACCOUNT only):
+     *  - Fetches documents expiring within 90 days OR already expired (up to 1 yr back)
+     *  - Fires alerts only on milestone days: 90, 30, 7 days before expiry
+     *  - Fires expired alerts every day until the document is renewed
+     *  - Skips a document once a newer document exists in the same category
+     *    (renewal detection — prevents perpetual spam after the user acts)
+     */
+    @Scheduled(cron = "0 0 9 * * *")
+    @Transactional
+    public void checkAndSendExpiryNotifications() {
+        logger.info("⏰ Running daily expiry notification check");
+
+        LocalDate today = LocalDate.now();
+        LocalDate lookAheadDate  = today.plusDays(90);
+        LocalDate lookBehindDate = today.minusDays(365); // expired docs tracked up to 1 year back
+
+        List<User> allUsers = userRepository.findAll();
+        int alertsSent = 0;
+
+        for (User user : allUsers) {
+            // Only primary accounts receive expiry notifications
+            if (!user.isPrimaryAccount()) continue;
+
+            // Respect the user's own expiry-alerts toggle
+            if (Boolean.FALSE.equals(user.getNotifExpiryAlerts())) continue;
+
+            try {
+                // Documents expiring within 90 days (not yet expired)
+                List<Document> soonDocs = documentRepository.findDocumentsExpiringBetween(
+                        user.getId(), today, lookAheadDate);
+
+                for (Document doc : soonDocs) {
+                    long daysLeft = ChronoUnit.DAYS.between(today, doc.getExpiryDate());
+
+                    if (!isAlertDay(daysLeft)) continue;
+                    if (isDocumentRenewed(doc, user.getId(), today)) continue;
+
+                    sendExpiryReminder(user, doc, (int) daysLeft);
+                    alertsSent++;
+                }
+
+                // Documents that already expired (within lookback window)
+                List<Document> expiredDocs = documentRepository.findDocumentsExpiringBetween(
+                        user.getId(), lookBehindDate, today.minusDays(1));
+
+                for (Document doc : expiredDocs) {
+                    if (isDocumentRenewed(doc, user.getId(), today)) continue;
+
+                    long daysExpired = ChronoUnit.DAYS.between(doc.getExpiryDate(), today);
+                    sendExpiredAlert(user, doc, (int) daysExpired);
+                    alertsSent++;
+                }
+
+            } catch (Exception ex) {
+                logger.error("Failed expiry check for user {}: {}", user.getId(), ex.getMessage(), ex);
+            }
+        }
+
+        logger.info("✅ Expiry notification check complete — {} alert(s) sent", alertsSent);
+    }
+
+    /**
+     * Returns true only on the three milestone days: 90, 30, 7 days before expiry.
+     * Prevents daily notification spam for documents not yet expired.
+     */
+    private boolean isAlertDay(long daysLeft) {
+        return daysLeft == 90 || daysLeft == 30 || daysLeft == 7;
+    }
+
+    /**
+     * Returns true if a newer document exists in the same category for this user —
+     * meaning the user has already renewed the document.
+     *
+     * Renewal criteria (all must hold):
+     *  - Different document ID
+     *  - Future expiry date (not expired)
+     *  - Created AFTER the original document
+     */
+    private boolean isDocumentRenewed(Document doc, Long userId, LocalDate today) {
+        try {
+            if (doc.getCategory() == null) return false;
+
+            List<Document> siblings = documentRepository.findByUserIdAndCategoryId(
+                    userId, doc.getCategory().getId());
+
+            return siblings.stream().anyMatch(other ->
+                    !other.getId().equals(doc.getId())
+                            && other.getExpiryDate() != null
+                            && other.getExpiryDate().isAfter(today)
+                            && other.getCreatedAt() != null
+                            && doc.getCreatedAt() != null
+                            && other.getCreatedAt().isAfter(doc.getCreatedAt())
+            );
+        } catch (Exception ex) {
+            logger.warn("Renewal check failed for doc {}: {}", doc.getId(), ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send expiry alert for a document that will expire soon.
+     * Subject escalates based on urgency:
+     *   90 days → "in 3 months"
+     *   30 days → "in 30 days"
+     *    7 days → "Urgent: in 7 days"
+     */
+    private void sendExpiredAlert(User user, Document doc, int daysExpired) {
+        String categoryName = doc.getCategory() != null
+                ? doc.getCategory().getName() : "Document";
+
+        String daysAgoStr = daysExpired == 0 ? "today"
+                : daysExpired == 1 ? "yesterday"
+                : daysExpired + " days ago";
+
+        // Email
+        if (emailEnabled) {
+            String subject = "⚠️ " + categoryName + " has expired";
+            String body = String.format(
+                    "Hello %s,\n\n" +
+                            "Your %s '%s' expired %s.\n\n" +
+                            "Please upload a renewed copy as soon as possible.\n\n" +
+                            "Best regards,\n%s Team",
+                    user.getFullName(), categoryName,
+                    doc.getOriginalFilename(), daysAgoStr, appName);
+            sendEmail(user.getEmail(), subject, body);
+        }
+
+        // SMS — every day until renewed
+        if (smsEnabled) {
+            String sms = String.format("DocBox: Your %s expired %s. Upload renewal now.",
+                    categoryName, daysAgoStr);
+            sendSMS(user.getPhoneNumber(), sms);
+        }
+
+        // In-app
+        createInAppNotification(
+                user.getId(),
+                "DOCUMENT_EXPIRED",
+                categoryName + " has expired",
+                "Your " + categoryName + " '" + doc.getOriginalFilename()
+                        + "' expired " + daysAgoStr + ". Upload a renewed copy.",
+                "/documents"
+        );
+
+        logger.info("Expired alert sent for doc {} (user {})", doc.getId(), user.getId());
     }
 }
