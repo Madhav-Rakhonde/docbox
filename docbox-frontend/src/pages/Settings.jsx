@@ -31,14 +31,12 @@ const NavItem = ({ icon: Icon, label, id, active, onClick }) => (
   </Box>
 );
 
-// ─── Section heading ────────────────────────────────────────────────────────
 const SectionTitle = ({ children }) => (
   <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: '#0F172A', mb: 2.5 }}>
     {children}
   </Typography>
 );
 
-// ─── Storage mini stat card ─────────────────────────────────────────────────
 const StatMini = ({ value, label, color = '#0F172A' }) => (
   <Card elevation={0} sx={{ borderRadius: '12px', border: '1px solid #E2E8F0', textAlign: 'center' }}>
     <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
@@ -48,7 +46,6 @@ const StatMini = ({ value, label, color = '#0F172A' }) => (
   </Card>
 );
 
-// ─── Notification toggle row ────────────────────────────────────────────────
 const NotifToggleRow = ({ checked, onChange, title, subtitle, loading }) => (
   <Box sx={{
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -76,7 +73,6 @@ const NotifToggleRow = ({ checked, onChange, title, subtitle, loading }) => (
   </Box>
 );
 
-// ─── Main Component ─────────────────────────────────────────────────────────
 const Settings = () => {
   const { user, setUser } = useAuth();
 
@@ -100,7 +96,6 @@ const Settings = () => {
   });
   const [storageInfo, setStorageInfo] = useState(null);
 
-  // ── Load profile ────────────────────────────────────────────────────────
   useEffect(() => {
     loadUserProfile();
     loadStorageInfo();
@@ -120,7 +115,6 @@ const Settings = () => {
         });
       }
     } catch {
-      // Fallback to AuthContext user data
       if (user) {
         setProfileData({
           fullName:    user.fullName    || '',
@@ -133,7 +127,6 @@ const Settings = () => {
     }
   };
 
-  // ── Load notification settings from backend ────────────────────────────
   const loadNotifSettings = async () => {
     try {
       setLoadingNotif(true);
@@ -148,32 +141,51 @@ const Settings = () => {
         });
       }
     } catch {
-      // Keep defaults on error — silently fail
+      // Keep defaults on error
     } finally {
       setLoadingNotif(false);
     }
   };
 
-  // ── Load storage info ─────────────────────────────────────────────────
+  // ── FIXED: handles all response shapes + never leaves storageInfo null ──
   const loadStorageInfo = async () => {
     try {
       const r = await analyticsService.getDashboardStats();
-      if (r?.success) {
-        const d = r.data || {};
-        const used  = d.storageUsedBytes  || 0;
-        const limit = d.storageLimitBytes || d.storageLimit || (5 * 1024 * 1024 * 1024);
-        setStorageInfo({
-          storageUsedBytes:  used,
-          storageLimitBytes: limit,
-          storagePercentage: limit > 0 ? Math.min((used * 100.0) / limit, 100) : 0,
-          totalDocuments:    d.totalDocuments    || 0,
-          totalFamilyMembers: d.totalFamilyMembers || 0,
-        });
+
+      // analyticsService may return axios response (r.data.success)
+      // or already-unwrapped data (r.success) — handle both
+      let d = {};
+      if (r?.data?.success) {
+        d = r.data.data || {};
+      } else if (r?.success) {
+        d = r.data || {};
+      } else {
+        // Fallback: treat entire response as data object
+        d = r?.data || r || {};
       }
-    } catch { /* ignore */ }
+
+      const used  = d.storageUsedBytes  || d.storageUsed  || 0;
+      const limit = d.storageLimitBytes || d.storageLimit  || (5 * 1024 * 1024 * 1024);
+
+      setStorageInfo({
+        storageUsedBytes:   used,
+        storageLimitBytes:  limit,
+        storagePercentage:  limit > 0 ? Math.min((used * 100.0) / limit, 100) : 0,
+        totalDocuments:     d.totalDocuments     || 0,
+        totalFamilyMembers: d.totalFamilyMembers || 0,
+      });
+    } catch {
+      // Always set something so the Skeleton resolves
+      setStorageInfo({
+        storageUsedBytes:   0,
+        storageLimitBytes:  5 * 1024 * 1024 * 1024,
+        storagePercentage:  0,
+        totalDocuments:     0,
+        totalFamilyMembers: 0,
+      });
+    }
   };
 
-  // ── Profile handlers ──────────────────────────────────────────────────
   const handleProfileChange = (e) =>
     setProfileData(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
@@ -190,7 +202,6 @@ const Settings = () => {
       });
       if (response.data.success) {
         toast.success('Profile updated successfully!');
-        // Keep AuthContext in sync if setUser is available
         if (typeof setUser === 'function') {
           setUser(prev => ({
             ...prev,
@@ -208,7 +219,6 @@ const Settings = () => {
     }
   };
 
-  // ── Password handlers ─────────────────────────────────────────────────
   const handlePasswordChange = (e) =>
     setPasswordData(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
@@ -224,18 +234,13 @@ const Settings = () => {
     finally { setLoading(false); }
   };
 
-  // ── Notification toggle handler — persists to backend immediately ──────
   const handleNotifToggle = async (key) => {
     const newValue = !notifSettings[key];
-
-    // Optimistic UI update
     setNotifSettings(prev => ({ ...prev, [key]: newValue }));
     setSavingNotif(true);
-
     try {
       const response = await api.put('/notifications/settings', { [key]: newValue });
       if (response.data.success && response.data.data) {
-        // Sync with server response to stay consistent
         const d = response.data.data;
         setNotifSettings({
           emailNotifications: d.emailNotifications ?? newValue,
@@ -245,12 +250,10 @@ const Settings = () => {
         });
         toast.success('Preference saved', { autoClose: 1500, hideProgressBar: true });
       } else {
-        // Rollback on failure
         setNotifSettings(prev => ({ ...prev, [key]: !newValue }));
         toast.error('Failed to save preference');
       }
     } catch {
-      // Rollback on error
       setNotifSettings(prev => ({ ...prev, [key]: !newValue }));
       toast.error('Failed to save preference');
     } finally {
@@ -258,7 +261,6 @@ const Settings = () => {
     }
   };
 
-  // ── Helpers ───────────────────────────────────────────────────────────
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 MB';
     const mb = bytes / (1024 * 1024);
@@ -290,7 +292,6 @@ const Settings = () => {
 
   return (
     <Container maxWidth="lg" sx={{ animation: 'fadeUp 0.35s ease both' }}>
-      {/* Header */}
       <Box sx={{ mb: 3 }}>
         <Typography sx={{
           fontFamily: "'DM Serif Display', serif",
@@ -305,7 +306,7 @@ const Settings = () => {
       </Box>
 
       <Grid container spacing={3}>
-        {/* ── Sidebar ── */}
+        {/* Sidebar */}
         <Grid item xs={12} md={3}>
           <Paper elevation={0} sx={{ p: 1.5, borderRadius: '16px', border: '1px solid #E2E8F0', position: 'sticky', top: 24 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, mb: 1 }}>
@@ -332,15 +333,13 @@ const Settings = () => {
           </Paper>
         </Grid>
 
-        {/* ── Main content ── */}
+        {/* Main content */}
         <Grid item xs={12} md={9}>
 
-          {/* ══ PROFILE ══ */}
+          {/* PROFILE */}
           {activeTab === 'profile' && (
             <Paper elevation={0} sx={{ p: { xs: 2.5, sm: 4 }, borderRadius: '16px', border: '1px solid #E2E8F0' }}>
               <SectionTitle>Profile Information</SectionTitle>
-
-              {/* Avatar section */}
               <Box sx={{
                 display: 'flex', alignItems: 'center', gap: 3, mb: 3.5,
                 p: 2.5, borderRadius: '14px', background: 'linear-gradient(135deg, #F8F9FC, #EEF2FF)',
@@ -368,140 +367,91 @@ const Settings = () => {
                   </Button>
                 </Box>
               </Box>
-
               <Divider sx={{ mb: 3 }} />
-
               <Grid container spacing={2.5}>
                 <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth label="Full Name" name="fullName"
-                    value={profileData.fullName}
-                    onChange={handleProfileChange}
+                  <TextField fullWidth label="Full Name" name="fullName"
+                    value={profileData.fullName} onChange={handleProfileChange}
                     InputProps={{ startAdornment: <InputAdornment position="start"><Person sx={{ fontSize: 18, color: '#94A3B8' }} /></InputAdornment> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth label="Email Address" name="email" type="email"
-                    value={profileData.email}
-                    disabled
-                    helperText="Email cannot be changed"
+                  <TextField fullWidth label="Email Address" name="email" type="email"
+                    value={profileData.email} disabled helperText="Email cannot be changed"
                     InputProps={{ startAdornment: <InputAdornment position="start"><Email sx={{ fontSize: 18, color: '#94A3B8' }} /></InputAdornment> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth label="Phone Number" name="phoneNumber"
-                    value={profileData.phoneNumber}
-                    onChange={handleProfileChange}
+                  <TextField fullWidth label="Phone Number" name="phoneNumber"
+                    value={profileData.phoneNumber} onChange={handleProfileChange}
                     placeholder="+919876543210"
                     InputProps={{ startAdornment: <InputAdornment position="start"><Phone sx={{ fontSize: 18, color: '#94A3B8' }} /></InputAdornment> }}
                   />
                 </Grid>
               </Grid>
-
               <Box sx={{ mt: 3.5, display: 'flex', gap: 1.5 }}>
-                <Button
-                  variant="contained"
-                  startIcon={loading ? null : <Save sx={{ fontSize: 16 }} />}
-                  onClick={handleProfileUpdate}
-                  disabled={loading}
-                  sx={{
-                    borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #6366F1, #4F46E5)',
-                    fontWeight: 600,
-                    minWidth: 140,
-                    '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)' },
-                  }}
-                >
+                <Button variant="contained" startIcon={loading ? null : <Save sx={{ fontSize: 16 }} />}
+                  onClick={handleProfileUpdate} disabled={loading}
+                  sx={{ borderRadius: '10px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)', fontWeight: 600, minWidth: 140,
+                    '&:hover': { background: 'linear-gradient(135deg, #4F46E5, #4338CA)' } }}>
                   {loading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Save Changes'}
                 </Button>
-                <Button
-                  variant="outlined"
-                  onClick={loadUserProfile}
-                  disabled={loading}
-                  sx={{ borderRadius: '10px', borderColor: '#E2E8F0', color: '#475569', '&:hover': { borderColor: '#6366F1', color: '#6366F1' } }}
-                >
+                <Button variant="outlined" onClick={loadUserProfile} disabled={loading}
+                  sx={{ borderRadius: '10px', borderColor: '#E2E8F0', color: '#475569', '&:hover': { borderColor: '#6366F1', color: '#6366F1' } }}>
                   Cancel
                 </Button>
               </Box>
             </Paper>
           )}
 
-          {/* ══ SECURITY ══ */}
+          {/* SECURITY */}
           {activeTab === 'security' && (
             <Paper elevation={0} sx={{ p: { xs: 2.5, sm: 4 }, borderRadius: '16px', border: '1px solid #E2E8F0' }}>
               <SectionTitle>Security Settings</SectionTitle>
-
               <Alert severity="info" sx={{ mb: 3, borderRadius: '10px', fontSize: '0.875rem' }}>
                 Choose a strong password to keep your account secure.
               </Alert>
-
               <Grid container spacing={2.5}>
                 <Grid item xs={12}>
-                  <TextField
-                    fullWidth label="Current Password" name="currentPassword" type="password"
-                    value={passwordData.currentPassword}
-                    onChange={handlePasswordChange}
-                  />
+                  <TextField fullWidth label="Current Password" name="currentPassword" type="password"
+                    value={passwordData.currentPassword} onChange={handlePasswordChange} />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth label="New Password" name="newPassword" type="password"
-                    value={passwordData.newPassword}
-                    onChange={handlePasswordChange}
-                    helperText="Minimum 8 characters"
-                  />
+                  <TextField fullWidth label="New Password" name="newPassword" type="password"
+                    value={passwordData.newPassword} onChange={handlePasswordChange} helperText="Minimum 8 characters" />
                 </Grid>
                 <Grid item xs={12} md={6}>
-                  <TextField
-                    fullWidth label="Confirm New Password" name="confirmPassword" type="password"
-                    value={passwordData.confirmPassword}
-                    onChange={handlePasswordChange}
-                  />
+                  <TextField fullWidth label="Confirm New Password" name="confirmPassword" type="password"
+                    value={passwordData.confirmPassword} onChange={handlePasswordChange} />
                 </Grid>
               </Grid>
-
               <Box sx={{ mt: 3 }}>
-                <Button
-                  variant="contained"
-                  startIcon={<Lock sx={{ fontSize: 16 }} />}
-                  onClick={handlePasswordUpdate}
-                  disabled={loading}
-                  sx={{ borderRadius: '10px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)', fontWeight: 600 }}
-                >
+                <Button variant="contained" startIcon={<Lock sx={{ fontSize: 16 }} />}
+                  onClick={handlePasswordUpdate} disabled={loading}
+                  sx={{ borderRadius: '10px', background: 'linear-gradient(135deg, #6366F1, #4F46E5)', fontWeight: 600 }}>
                   Update Password
                 </Button>
               </Box>
-
               <Divider sx={{ my: 4 }} />
-
               <Box sx={{ p: 2.5, borderRadius: '14px', border: '1px solid #E2E8F0' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
                   <Box sx={{ width: 36, height: 36, borderRadius: '10px', background: 'rgba(99,102,241,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Security sx={{ fontSize: 18, color: '#6366F1' }} />
                   </Box>
                   <Box>
-                    <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A' }}>
-                      Two-Factor Authentication
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.78rem', color: '#94A3B8' }}>
-                      Add an extra layer of security to your account
-                    </Typography>
+                    <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A' }}>Two-Factor Authentication</Typography>
+                    <Typography sx={{ fontSize: '0.78rem', color: '#94A3B8' }}>Add an extra layer of security to your account</Typography>
                   </Box>
                 </Box>
-                <Button
-                  variant="outlined"
-                  onClick={() => toast.info('2FA feature coming soon!')}
-                  sx={{ mt: 1.5, borderRadius: '8px', borderColor: '#C7D2FE', color: '#6366F1', '&:hover': { background: 'rgba(99,102,241,0.06)', borderColor: '#6366F1' } }}
-                >
+                <Button variant="outlined" onClick={() => toast.info('2FA feature coming soon!')}
+                  sx={{ mt: 1.5, borderRadius: '8px', borderColor: '#C7D2FE', color: '#6366F1', '&:hover': { background: 'rgba(99,102,241,0.06)', borderColor: '#6366F1' } }}>
                   Enable 2FA
                 </Button>
               </Box>
             </Paper>
           )}
 
-          {/* ══ NOTIFICATIONS ══ */}
+          {/* NOTIFICATIONS */}
           {activeTab === 'notifications' && (
             <Paper elevation={0} sx={{ p: { xs: 2.5, sm: 4 }, borderRadius: '16px', border: '1px solid #E2E8F0' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
@@ -519,48 +469,22 @@ const Settings = () => {
                   </Box>
                 )}
               </Box>
-
               {loadingNotif ? (
-                // Skeleton while loading from API
                 [1,2,3,4].map(i => (
                   <Skeleton key={i} variant="rounded" height={68} sx={{ mb: 1.5, borderRadius: '12px' }} />
                 ))
               ) : (
                 <>
-                  <NotifToggleRow
-                    checked={notifSettings.emailNotifications}
-                    onChange={() => handleNotifToggle('emailNotifications')}
-                    loading={savingNotif}
-                    title="Email Notifications"
-                    subtitle="Receive important updates and alerts via email"
-                  />
-                  <NotifToggleRow
-                    checked={notifSettings.expiryAlerts}
-                    onChange={() => handleNotifToggle('expiryAlerts')}
-                    loading={savingNotif}
-                    title="Document Expiry Alerts"
-                    subtitle="Get notified 90, 30 and 7 days before documents expire"
-                  />
-                  <NotifToggleRow
-                    checked={notifSettings.shareNotifications}
-                    onChange={() => handleNotifToggle('shareNotifications')}
-                    loading={savingNotif}
-                    title="Share Notifications"
-                    subtitle="Notifications when documents are shared with you"
-                  />
-                  <NotifToggleRow
-                    checked={notifSettings.weeklyReports}
-                    onChange={() => handleNotifToggle('weeklyReports')}
-                    loading={savingNotif}
-                    title="Weekly Reports"
-                    subtitle="Receive a weekly summary of your document activity"
-                  />
+                  <NotifToggleRow checked={notifSettings.emailNotifications} onChange={() => handleNotifToggle('emailNotifications')} loading={savingNotif} title="Email Notifications" subtitle="Receive important updates and alerts via email" />
+                  <NotifToggleRow checked={notifSettings.expiryAlerts} onChange={() => handleNotifToggle('expiryAlerts')} loading={savingNotif} title="Document Expiry Alerts" subtitle="Get notified 90, 30 and 7 days before documents expire" />
+                  <NotifToggleRow checked={notifSettings.shareNotifications} onChange={() => handleNotifToggle('shareNotifications')} loading={savingNotif} title="Share Notifications" subtitle="Notifications when documents are shared with you" />
+                  <NotifToggleRow checked={notifSettings.weeklyReports} onChange={() => handleNotifToggle('weeklyReports')} loading={savingNotif} title="Weekly Reports" subtitle="Receive a weekly summary of your document activity" />
                 </>
               )}
             </Paper>
           )}
 
-          {/* ══ STORAGE ══ */}
+          {/* STORAGE */}
           {activeTab === 'storage' && (
             <Paper elevation={0} sx={{ p: { xs: 2.5, sm: 4 }, borderRadius: '16px', border: '1px solid #E2E8F0' }}>
               <SectionTitle>Storage Management</SectionTitle>
@@ -601,26 +525,23 @@ const Settings = () => {
                   </Box>
 
                   <Grid container spacing={2} sx={{ mb: 3.5 }}>
-                    <Grid item xs={6} md={3}><StatMini value={storageInfo.totalDocuments}       label="Documents" /></Grid>
-                    <Grid item xs={6} md={3}><StatMini value={storageInfo.totalFamilyMembers}   label="Family Members" /></Grid>
+                    <Grid item xs={6} md={3}><StatMini value={storageInfo.totalDocuments}      label="Documents" /></Grid>
+                    <Grid item xs={6} md={3}><StatMini value={storageInfo.totalFamilyMembers}  label="Family Members" /></Grid>
                     <Grid item xs={6} md={3}><StatMini value={formatBytes(storageInfo.storageLimitBytes)} label="Storage Limit" /></Grid>
                     <Grid item xs={6} md={3}><StatMini value="Active" label="Account Status" color="#10B981" /></Grid>
                   </Grid>
                 </>
               )}
 
-              <Button
-                variant="outlined" color="error"
+              <Button variant="outlined" color="error"
                 startIcon={<Delete sx={{ fontSize: 16 }} />}
                 onClick={() => toast.info('Clear cache feature coming soon!')}
-                sx={{ borderRadius: '10px', mb: 3 }}
-              >
+                sx={{ borderRadius: '10px', mb: 3 }}>
                 Clear Cache
               </Button>
 
               <Divider sx={{ mb: 3 }} />
 
-              {/* Danger zone */}
               <Box sx={{ p: 3, borderRadius: '14px', border: '2px solid #FCA5A5', background: '#FEF2F2' }}>
                 <Typography sx={{ fontWeight: 700, fontSize: '0.875rem', color: '#EF4444', mb: 0.5 }}>
                   Danger Zone
@@ -628,12 +549,10 @@ const Settings = () => {
                 <Typography sx={{ fontSize: '0.825rem', color: '#64748B', mb: 2, lineHeight: 1.7 }}>
                   Once you delete your account, there is no going back. Please be certain.
                 </Typography>
-                <Button
-                  variant="outlined" color="error"
+                <Button variant="outlined" color="error"
                   startIcon={<Delete sx={{ fontSize: 15 }} />}
                   onClick={() => toast.error('Account deletion must be confirmed via email')}
-                  sx={{ borderRadius: '8px', borderColor: '#F87171', color: '#EF4444', '&:hover': { background: '#FEF2F2', borderColor: '#EF4444' } }}
-                >
+                  sx={{ borderRadius: '8px', borderColor: '#F87171', color: '#EF4444', '&:hover': { background: '#FEF2F2', borderColor: '#EF4444' } }}>
                   Delete Account
                 </Button>
               </Box>

@@ -27,7 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Authentication Service
@@ -56,31 +55,26 @@ public class AuthService {
      */
     @Transactional
     public AuthResponse signup(SignupRequest request) {
-        // Check if email already exists
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new DuplicateResourceException("User", "email", request.getEmail());
         }
 
-        // Create new user
         User user = new User();
         user.setEmail(request.getEmail());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setFullName(request.getFullName());
         user.setPhoneNumber(request.getPhoneNumber());
-        user.setRole(UserRole.PRIMARY_ACCOUNT); // New signups are always PRIMARY_ACCOUNT
+        user.setRole(UserRole.PRIMARY_ACCOUNT);
         user.setIsActive(true);
-        user.setEmailVerified(false); // Email verification can be added later
+        user.setEmailVerified(false);
 
         user = userRepository.save(user);
 
-        // Generate tokens
         String accessToken = tokenProvider.generateAccessToken(user.getId());
         String refreshToken = tokenProvider.generateRefreshToken(user.getId());
 
-        // Save session
         saveUserSession(user, refreshToken, null);
 
-        // Build response
         return new AuthResponse(
                 accessToken,
                 refreshToken,
@@ -98,30 +92,24 @@ public class AuthService {
      */
     @Transactional
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
-        // Authenticate user
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
         );
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        // Get user details
         UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
         User user = userRepository.findById(userPrincipal.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userPrincipal.getId()));
 
-        // Update last login
         user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
 
-        // Generate tokens
         String accessToken = tokenProvider.generateAccessToken(authentication);
         String refreshToken = tokenProvider.generateRefreshToken(userPrincipal.getId());
 
-        // Save session
         saveUserSession(user, refreshToken, httpRequest);
 
-        // Build response
         return new AuthResponse(
                 accessToken,
                 refreshToken,
@@ -141,17 +129,14 @@ public class AuthService {
     public AuthResponse refreshToken(RefreshTokenRequest request) {
         String refreshToken = request.getRefreshToken();
 
-        // Validate refresh token
         if (!tokenProvider.validateToken(refreshToken)) {
             throw new UnauthorizedException("Invalid or expired refresh token");
         }
 
-        // Get user from refresh token
         Long userId = tokenProvider.getUserIdFromToken(refreshToken);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
-        // Verify session exists and is active
         UserSession session = sessionRepository.findByRefreshToken(refreshToken)
                 .orElseThrow(() -> new UnauthorizedException("Session not found"));
 
@@ -159,16 +144,14 @@ public class AuthService {
             throw new UnauthorizedException("Session expired or invalid");
         }
 
-        // Update session last used
         session.updateLastUsed();
         sessionRepository.save(session);
 
-        // Generate new access token (refresh token remains the same)
         String newAccessToken = tokenProvider.generateAccessToken(userId);
 
         return new AuthResponse(
                 newAccessToken,
-                refreshToken, // Same refresh token
+                refreshToken,
                 tokenProvider.getAccessTokenExpirationMs(),
                 user.getId(),
                 user.getEmail(),
@@ -180,18 +163,19 @@ public class AuthService {
 
     /**
      * Logout user - invalidate session
+     * Silently succeeds if session is not found (already logged out / token expired)
      */
     @Transactional
     public void logout(String refreshToken) {
         if (refreshToken == null || refreshToken.isEmpty()) {
-            throw new BadRequestException("Refresh token is required for logout");
+            return; // Nothing to invalidate — treat as already logged out
         }
 
-        UserSession session = sessionRepository.findByRefreshToken(refreshToken)
-                .orElseThrow(() -> new ResourceNotFoundException("Session not found"));
-
-        session.invalidate();
-        sessionRepository.save(session);
+        sessionRepository.findByRefreshToken(refreshToken)
+                .ifPresent(session -> {
+                    session.invalidate();
+                    sessionRepository.save(session);
+                });
     }
 
     /**
@@ -204,24 +188,20 @@ public class AuthService {
 
     /**
      * Save user session
-     */
-    /**
-     * Save user session with unique token
+     * Stores the refresh token exactly as issued so lookups always match.
      */
     private void saveUserSession(User user, String refreshToken, HttpServletRequest request) {
-        // Invalidate old active sessions for this user to prevent duplicates
+        // Invalidate existing active sessions for this user
         List<UserSession> activeSessions = sessionRepository.findByUserAndIsActiveTrue(user);
         for (UserSession oldSession : activeSessions) {
             oldSession.setIsActive(false);
             sessionRepository.save(oldSession);
         }
 
-        // Add UUID to refresh token to ensure uniqueness
-        String uniqueRefreshToken = refreshToken + "-" + UUID.randomUUID().toString();
-
+        // ✅ Store the token as-is — no UUID suffix so logout lookups match
         UserSession session = new UserSession();
         session.setUser(user);
-        session.setRefreshToken(uniqueRefreshToken);
+        session.setRefreshToken(refreshToken);
 
         if (request != null) {
             session.setIpAddress(getClientIpAddress(request));
@@ -238,11 +218,6 @@ public class AuthService {
 
         sessionRepository.save(session);
     }
-
-
-
-
-
 
     /**
      * Get client IP address from request
@@ -262,19 +237,11 @@ public class AuthService {
         if (userAgent == null || userAgent.isEmpty()) {
             return "Unknown Device";
         }
-
-        if (userAgent.contains("Mobile")) {
-            return "Mobile Device";
-        } else if (userAgent.contains("Tablet")) {
-            return "Tablet";
-        } else if (userAgent.contains("Windows")) {
-            return "Windows PC";
-        } else if (userAgent.contains("Mac")) {
-            return "Mac";
-        } else if (userAgent.contains("Linux")) {
-            return "Linux PC";
-        }
-
+        if (userAgent.contains("Mobile")) return "Mobile Device";
+        if (userAgent.contains("Tablet")) return "Tablet";
+        if (userAgent.contains("Windows")) return "Windows PC";
+        if (userAgent.contains("Mac")) return "Mac";
+        if (userAgent.contains("Linux")) return "Linux PC";
         return "Desktop";
     }
 }

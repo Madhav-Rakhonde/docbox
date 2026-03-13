@@ -293,7 +293,6 @@ button { min-height: 36px; }
 }
 .db-mav:first-child { margin-left: 0; }
 
-/* Floating chips */
 /* ══════════════════ SECURITY STRIP ══════════════════ */
 .db-sstrip {
   background: rgba(30,41,59,0.5);
@@ -638,7 +637,6 @@ button { min-height: 36px; }
   .db-nav { padding:0 16px; }
   .db-nav-row { height:60px; gap:8px; }
 
-  /* Hide sign-in on very small screens, keep Get started */
   .db-nbtn { font-size:0.78rem; padding:6px 12px; border-radius:8px; }
   .db-nbtn2 { font-size:0.78rem; padding:7px 12px; margin-left:0; }
 
@@ -652,7 +650,7 @@ button { min-height: 36px; }
   .db-trow { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:28px; margin-bottom:36px; }
   .db-tp { font-size:0.71rem; padding:6px 10px; justify-content:flex-start; border-radius:10px; }
 
-  /* Mockup — scale down, disable float animation on mobile */
+  /* Mockup */
   .db-mock-wrap { max-width:100%; }
   .db-mock { animation:none; border-radius:14px; }
   .db-mbar { padding:10px 14px; }
@@ -666,7 +664,7 @@ button { min-height: 36px; }
   .db-mfoot { padding:9px 12px; }
   .db-mav { width:20px; height:20px; font-size:0.5rem; }
 
-  /* Security strip — scroll horizontally */
+  /* Security strip */
   .db-sstrip { padding:14px 16px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .db-sstrip-in { flex-wrap:nowrap; justify-content:flex-start; gap:20px; width:max-content; padding:0 4px; }
 
@@ -738,7 +736,6 @@ function MeshCanvas() {
     let raf, t = 0;
     const resize = () => { c.width = window.innerWidth; c.height = window.innerHeight; };
     resize(); window.addEventListener('resize', resize);
-    // Indigo/navy/green orbs matching DocBox palette
     const pts = [
       {x:0.18,y:0.25,hue:238,r:0.4,s:0.00026},
       {x:0.82,y:0.18,hue:251,r:0.35,s:0.00034},
@@ -875,11 +872,15 @@ export default function LandingPage() {
             <div className="db-badge">
               <span className="db-badge-dot">🇮🇳</span>Built for Indian families
             </div>
+
+            {/* ── UPDATED HEADLINE ── */}
             <h1 className="db-h1">
-              Stop losing documents<br />in <span className="db-grd">WhatsApp groups.</span>
+              Your documents are in<br />a <span className="db-grd">drawer somewhere.</span>
             </h1>
+
+            {/* ── UPDATED SUBHEADING ── */}
             <p className="db-h-sub">
-              One secure vault for every Aadhaar, PAN, passport and certificate your family owns — with smart expiry alerts and one-tap sharing.
+              One secure vault for every Aadhaar, PAN, passport and certificate your family owns — always found in seconds, never buried in a file again.
             </p>
 
             <div className="db-capture-wrap">
@@ -1215,8 +1216,10 @@ export default function LandingPage() {
         {/* ══ CTA ══ */}
         <section className="db-ctas">
           <div className="db-ctabox db-rv">
-            <h2 className="db-ctah">Your family deserves better<br />than a <em>WhatsApp group.</em></h2>
-            <p className="db-ctap">Join 2,400+ Indian families who find every document they need, exactly when they need it.</p>
+            {/* ── UPDATED CTA HEADLINE ── */}
+            <h2 className="db-ctah">Stop digging through<br /><em>drawers and old files.</em></h2>
+            {/* ── UPDATED CTA SUBTEXT ── */}
+            <p className="db-ctap">Join 2,400+ Indian families who stopped losing documents in drawers — and find everything in 3 seconds.</p>
             <div className="db-ctabtns">
               <button className="db-ctab1" onClick={() => navigate('/signup')}>
                 Create free vault — no card needed →

@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -76,12 +77,30 @@ public class AuthController {
     /**
      * Logout user (invalidate current session)
      * POST /api/auth/logout
+     * Body is optional — refresh token can also be passed in the Authorization header.
      */
     @PostMapping("/logout")
     public ResponseEntity<ApiResponse<Void>> logout(
-            @Valid @RequestBody RefreshTokenRequest request) {
+            @RequestBody(required = false) RefreshTokenRequest request,
+            HttpServletRequest httpRequest) {
 
-        authService.logout(request.getRefreshToken());
+        String refreshToken = null;
+
+        // Prefer token from request body
+        if (request != null && StringUtils.hasText(request.getRefreshToken())) {
+            refreshToken = request.getRefreshToken();
+        } else {
+            // Fall back to Authorization header (Bearer <token>)
+            String bearerToken = httpRequest.getHeader("Authorization");
+            if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
+                refreshToken = bearerToken.substring(7);
+            }
+        }
+
+        if (StringUtils.hasText(refreshToken)) {
+            authService.logout(refreshToken);
+        }
+        // Even if no token found, return success — client is logging out regardless
 
         return ResponseEntity.ok(ApiResponse.success("Logged out successfully"));
     }

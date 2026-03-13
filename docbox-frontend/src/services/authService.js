@@ -12,12 +12,11 @@ export const authService = {
     const response = await api.post(endpoints.login, credentials);
     if (response.data.success) {
       const { accessToken, refreshToken, user } = response.data.data;
-      
-      // Store with consistent key names
-      localStorage.setItem('token', accessToken); // Changed from 'accessToken'
+
+      localStorage.setItem('token', accessToken);
       localStorage.setItem('refreshToken', refreshToken);
       localStorage.setItem('user', JSON.stringify(user));
-      
+
       console.log('✅ Login successful, tokens stored');
     }
     return response.data;
@@ -26,7 +25,8 @@ export const authService = {
   // Logout
   logout: async () => {
     try {
-      await api.post(endpoints.logout);
+      const refreshToken = localStorage.getItem('refreshToken');
+      await api.post(endpoints.logout, { refreshToken });
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
