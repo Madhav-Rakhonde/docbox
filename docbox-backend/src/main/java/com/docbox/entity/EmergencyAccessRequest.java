@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -18,6 +19,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class EmergencyAccessRequest {
 
     @Id
@@ -26,22 +28,28 @@ public class EmergencyAccessRequest {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "document_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "user", "uploadedBy",
+            "familyMember", "ocrText", "extractedData"})
     private Document document;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "requested_by", nullable = false)
-    private User requestedBy; // Sub-account requesting access
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
+    private User requestedBy;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "primary_account_id", nullable = false)
-    private User primaryAccount; // Primary account who will review
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
+    private User primaryAccount;
 
     @NotBlank(message = "Request reason is required")
     @Column(name = "request_reason", columnDefinition = "TEXT", nullable = false)
     private String requestReason;
 
     @Column(length = 20)
-    private String status = "PENDING"; // PENDING, APPROVED, REJECTED
+    private String status = "PENDING";
 
     @CreationTimestamp
     @Column(name = "requested_at", updatable = false)
@@ -52,6 +60,8 @@ public class EmergencyAccessRequest {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reviewed_by")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User reviewedBy;
 
     @Column(name = "review_notes", columnDefinition = "TEXT")
@@ -59,17 +69,9 @@ public class EmergencyAccessRequest {
 
     // Helper methods
 
-    public boolean isPending() {
-        return "PENDING".equals(this.status);
-    }
-
-    public boolean isApproved() {
-        return "APPROVED".equals(this.status);
-    }
-
-    public boolean isRejected() {
-        return "REJECTED".equals(this.status);
-    }
+    public boolean isPending() { return "PENDING".equals(this.status); }
+    public boolean isApproved() { return "APPROVED".equals(this.status); }
+    public boolean isRejected() { return "REJECTED".equals(this.status); }
 
     public void approve(User reviewer, String notes) {
         this.status = "APPROVED";

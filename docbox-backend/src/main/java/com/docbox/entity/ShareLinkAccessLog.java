@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -17,6 +18,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class ShareLinkAccessLog {
 
     @Id
@@ -25,6 +27,7 @@ public class ShareLinkAccessLog {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "shared_link_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "document", "createdBy", "passwordHash"})
     private SharedLink sharedLink;
 
     @CreationTimestamp
@@ -38,7 +41,7 @@ public class ShareLinkAccessLog {
     private String userAgent;
 
     @Column(length = 50)
-    private String action; // VIEWED, DOWNLOADED
+    private String action;
 
     // Factory methods
 

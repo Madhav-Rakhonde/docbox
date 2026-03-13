@@ -6,31 +6,34 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 /**
- * Category Permission Entity - FIXED
+ * Category Permission Entity
  * Stores default permissions for entire document categories
  */
 @Entity
 @Table(name = "category_permissions")
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // ✅ FIX: Ignore Hibernate proxy
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class CategoryPermission {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    // EAGER: category name/icon is always needed when rendering a permission list.
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "category_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // ✅ FIX
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
     private DocumentCategory category;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "primary_account_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash", "emailVerificationToken", "resetPasswordToken"})  // ✅ FIX
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User primaryAccount;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash", "emailVerificationToken", "resetPasswordToken"})  // ✅ FIX
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User user;
 
     @Enumerated(EnumType.STRING)
@@ -39,7 +42,8 @@ public class CategoryPermission {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by")
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash"})  // ✅ FIX
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User createdBy;
 
     @Column(name = "created_at")
@@ -49,69 +53,31 @@ public class CategoryPermission {
     private LocalDateTime updatedAt;
 
     // Getters and Setters
-    public Long getId() {
-        return id;
-    }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public void setId(Long id) {
-        this.id = id;
-    }
+    public DocumentCategory getCategory() { return category; }
+    public void setCategory(DocumentCategory category) { this.category = category; }
 
-    public DocumentCategory getCategory() {
-        return category;
-    }
+    public User getPrimaryAccount() { return primaryAccount; }
+    public void setPrimaryAccount(User primaryAccount) { this.primaryAccount = primaryAccount; }
 
-    public void setCategory(DocumentCategory category) {
-        this.category = category;
-    }
+    public User getUser() { return user; }
+    public void setUser(User user) { this.user = user; }
 
-    public User getPrimaryAccount() {
-        return primaryAccount;
-    }
-
-    public void setPrimaryAccount(User primaryAccount) {
-        this.primaryAccount = primaryAccount;
-    }
-
-    public User getUser() {
-        return user;
-    }
-
-    public void setUser(User user) {
-        this.user = user;
-    }
-
-    public PermissionLevel getDefaultPermissionLevel() {
-        return defaultPermissionLevel;
-    }
-
+    public PermissionLevel getDefaultPermissionLevel() { return defaultPermissionLevel; }
     public void setDefaultPermissionLevel(PermissionLevel defaultPermissionLevel) {
         this.defaultPermissionLevel = defaultPermissionLevel;
     }
 
-    public User getCreatedBy() {
-        return createdBy;
-    }
+    public User getCreatedBy() { return createdBy; }
+    public void setCreatedBy(User createdBy) { this.createdBy = createdBy; }
 
-    public void setCreatedBy(User createdBy) {
-        this.createdBy = createdBy;
-    }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 
     @PrePersist
     protected void onCreate() {

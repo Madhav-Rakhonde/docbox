@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -16,6 +17,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // FIX: Prevents proxy errors when FamilyMember is lazy-loaded from Document
 public class FamilyMember {
 
     @Id
@@ -24,12 +26,16 @@ public class FamilyMember {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "primary_account_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User primaryAccount;
 
-    // Links to User table if this family member is a SUB_ACCOUNT
-    // NULL if this is a PROFILE_ONLY member
+    // NULL when PROFILE_ONLY — LAZY is correct here.
+    // @JsonIgnoreProperties stops Jackson from traversing into this proxy.
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User user;
 
     @NotBlank(message = "Name is required")
@@ -37,7 +43,7 @@ public class FamilyMember {
     private String name;
 
     @Column
-    private String relationship; // Father, Mother, Son, Daughter, Spouse, etc.
+    private String relationship;
 
     @Column(name = "date_of_birth")
     private LocalDate dateOfBirth;

@@ -1,28 +1,32 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
  * In-App Notification Entity
- * ✅ UPDATED: Added metadata field for scheme details
  */
 @Entity
 @Table(name = "in_app_notifications")
 @Data
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class InAppNotification {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne
+    // EAGER: notification responses always include user context (e.g. to display or route).
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "user_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User user;
 
     @Column(nullable = false, length = 50)
-    private String type; // DOCUMENT_UPLOADED, DOCUMENT_SHARED, SCHEME_DISCOVERY, etc.
+    private String type;
 
     @Column(nullable = false)
     private String title;
@@ -30,11 +34,10 @@ public class InAppNotification {
     @Column(columnDefinition = "TEXT")
     private String message;
 
-    private String link; // URL to navigate to
+    private String link;
 
-    // ✅ ADD THIS FIELD (if not already present)
     @Column(columnDefinition = "TEXT")
-    private String metadata; // JSON data for scheme/document details
+    private String metadata;
 
     @Column(name = "is_read")
     private Boolean isRead = false;
@@ -49,9 +52,7 @@ public class InAppNotification {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
-        if (isRead == null) {
-            isRead = false;
-        }
+        if (isRead == null) isRead = false;
     }
 
     @PreUpdate

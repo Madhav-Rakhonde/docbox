@@ -1,11 +1,10 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import org.hibernate.annotations.Type;
-
 import jakarta.persistence.Column;
-
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -23,23 +22,30 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class DocumentAuditLog {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // LAZY is fine for audit logs — they are internal records, not serialized to API responses directly.
+    // @JsonIgnoreProperties prevents proxy errors if serialization does occur.
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "document_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "user", "uploadedBy",
+            "familyMember", "ocrText", "extractedData"})
     private Document document;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User user;
 
     @NotBlank(message = "Action is required")
     @Column(nullable = false, length = 50)
-    private String action; // UPLOADED, VIEWED, DOWNLOADED, SHARED, DELETED, MODIFIED, MOVED, etc.
+    private String action;
 
     @Column(name = "ip_address", length = 50)
     private String ipAddress;

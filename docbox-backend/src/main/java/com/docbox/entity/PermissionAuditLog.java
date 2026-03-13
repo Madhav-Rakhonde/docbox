@@ -1,6 +1,7 @@
 package com.docbox.entity;
 
 import com.docbox.enums.PermissionLevel;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -19,6 +20,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class PermissionAuditLog {
 
     @Id
@@ -27,15 +29,19 @@ public class PermissionAuditLog {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "document_id")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "user", "uploadedBy",
+            "familyMember", "ocrText", "extractedData"})
     private Document document;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
-    private User user; // Who was affected by this change
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
+    private User user;
 
     @NotBlank(message = "Action is required")
     @Column(nullable = false, length = 50)
-    private String action; // GRANTED, REVOKED, MODIFIED, EXPIRED
+    private String action;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "old_permission")
@@ -47,6 +53,8 @@ public class PermissionAuditLog {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "changed_by", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User changedBy;
 
     @Column(name = "change_reason", columnDefinition = "TEXT")
@@ -56,7 +64,7 @@ public class PermissionAuditLog {
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
-    // Factory methods for creating audit logs
+    // Factory methods
 
     public static PermissionAuditLog granted(Document document, User user, PermissionLevel newPermission, User changedBy, String reason) {
         PermissionAuditLog log = new PermissionAuditLog();
@@ -98,7 +106,7 @@ public class PermissionAuditLog {
         log.setUser(user);
         log.setAction("EXPIRED");
         log.setOldPermission(oldPermission);
-        log.setChangedBy(user); // System action
+        log.setChangedBy(user);
         log.setChangeReason("Permission expired automatically");
         return log;
     }

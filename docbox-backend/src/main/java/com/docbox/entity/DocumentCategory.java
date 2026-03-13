@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // FIX: Prevents proxy serialization errors when category is accessed outside session
 public class DocumentCategory {
 
     @Id
@@ -25,7 +27,7 @@ public class DocumentCategory {
     private String name;
 
     @Column(length = 50)
-    private String icon; // Emoji or icon identifier
+    private String icon;
 
     @Column(name = "display_order")
     private Integer displayOrder;

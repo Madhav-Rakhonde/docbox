@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -19,6 +20,7 @@ import java.util.UUID;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class SharedLink {
 
     @Id
@@ -27,24 +29,28 @@ public class SharedLink {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "document_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "user", "uploadedBy",
+            "familyMember", "ocrText", "extractedData"})
     private Document document;
 
     @NotBlank(message = "Link token is required")
     @Column(name = "link_token", unique = true, nullable = false)
-    private String linkToken; // UUID for the share link
+    private String linkToken;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "created_by", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User createdBy;
 
     @Column(name = "password_hash")
-    private String passwordHash; // Optional password protection
+    private String passwordHash;
 
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 
     @Column(name = "max_views")
-    private Integer maxViews; // Optional view limit
+    private Integer maxViews;
 
     @Column(name = "current_views")
     private Integer currentViews = 0;
@@ -56,7 +62,7 @@ public class SharedLink {
     private Boolean isActive = true;
 
     @Column(name = "qr_code_path", length = 1000)
-    private String qrCodePath; // Path to generated QR code image
+    private String qrCodePath;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -67,68 +73,46 @@ public class SharedLink {
 
     // Helper methods
 
-    /**
-     * Check if link is currently valid
-     */
+    /** Check if link is currently valid */
     public boolean isCurrentlyValid() {
-        if (!isActive) {
-            return false;
-        }
-        if (LocalDateTime.now().isAfter(expiresAt)) {
-            return false;
-        }
-        if (maxViews != null && currentViews >= maxViews) {
-            return false;
-        }
+        if (!isActive) return false;
+        if (LocalDateTime.now().isAfter(expiresAt)) return false;
+        if (maxViews != null && currentViews >= maxViews) return false;
         return true;
     }
 
-    /**
-     * Check if link has password protection
-     */
+    /** Check if link has password protection */
     public boolean isPasswordProtected() {
         return passwordHash != null && !passwordHash.isEmpty();
     }
 
-    /**
-     * Check if link has expired
-     */
+    /** Check if link has expired */
     public boolean hasExpired() {
         return LocalDateTime.now().isAfter(expiresAt);
     }
 
-    /**
-     * Check if view limit reached
-     */
+    /** Check if view limit reached */
     public boolean hasReachedViewLimit() {
         return maxViews != null && currentViews >= maxViews;
     }
 
-    /**
-     * Increment view count
-     */
+    /** Increment view count */
     public void incrementViews() {
         this.currentViews++;
     }
 
-    /**
-     * Revoke the link
-     */
+    /** Revoke the link */
     public void revoke() {
         this.isActive = false;
         this.revokedAt = LocalDateTime.now();
     }
 
-    /**
-     * Generate a new unique token
-     */
+    /** Generate a new unique token */
     public static String generateToken() {
         return UUID.randomUUID().toString();
     }
 
-    /**
-     * Get the full shareable URL
-     */
+    /** Get the full shareable URL */
     public String getShareableUrl(String baseUrl) {
         return baseUrl + "/share/" + this.linkToken;
     }

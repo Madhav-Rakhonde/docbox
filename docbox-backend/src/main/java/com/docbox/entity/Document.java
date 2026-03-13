@@ -13,7 +13,6 @@ import org.hibernate.annotations.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,20 +30,21 @@ public class Document {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // LAZY is fine — @JsonIgnoreProperties prevents Jackson from touching the proxy.
+    // If you ever serialize user directly, add a DTO instead.
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-    private User user; // Owner of the document
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
+    private User user;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "family_member_id")
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-    private FamilyMember familyMember; // Who this document belongs to
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "primaryAccount", "user"})
+    private FamilyMember familyMember;
 
-    // FIX: Changed from FetchType.LAZY to FetchType.EAGER
-    // Category is always needed when a document is loaded/serialized.
-    // LAZY caused "could not initialize proxy [DocumentCategory#x] - no Session"
-    // because the Hibernate session was closed before JSON serialization occurred.
+    // EAGER: category is non-nullable and always needed in document responses.
+    // Root cause of the original 400 error: LAZY proxy accessed after session closed.
     @ManyToOne(fetch = FetchType.EAGER, optional = false)
     @JoinColumn(name = "category_id", nullable = false)
     @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
@@ -56,9 +56,9 @@ public class Document {
 
     @NotBlank(message = "Stored filename is required")
     @Column(name = "stored_filename", unique = true, nullable = false, length = 500)
-    private String storedFilename; // UUID-based filename
+    private String storedFilename;
 
-    @Column(length = 64, unique = false) // SHA-256 produces 64 hex characters
+    @Column(length = 64, unique = false)
     private String fileHash;
 
     @NotBlank(message = "File path is required")
@@ -67,11 +67,11 @@ public class Document {
 
     @NotNull(message = "File size is required")
     @Column(name = "file_size", nullable = false)
-    private Long fileSize; // in bytes
+    private Long fileSize;
 
     @NotBlank(message = "File type is required")
     @Column(name = "file_type", nullable = false, length = 50)
-    private String fileType; // PDF, JPG, PNG, etc.
+    private String fileType;
 
     @Column(name = "mime_type", length = 100)
     private String mimeType;
@@ -82,12 +82,11 @@ public class Document {
     @Column(name = "page_count")
     private Integer pageCount = 1;
 
-    // OCR and Classification
     @Column(name = "ocr_text", columnDefinition = "TEXT")
     private String ocrText;
 
     @Column(name = "ocr_confidence", precision = 5, scale = 2)
-    private BigDecimal ocrConfidence; // 0.00 to 100.00
+    private BigDecimal ocrConfidence;
 
     @Column(name = "auto_category_detected", length = 100)
     private String autoCategoryDetected;
@@ -95,14 +94,12 @@ public class Document {
     @Column(name = "is_validated")
     private Boolean isValidated = false;
 
-    // Extracted Data (JSON format for flexibility)
     @Type(JsonBinaryType.class)
     @Column(name = "extracted_data", columnDefinition = "jsonb")
     private String extractedData;
 
-    // Metadata
     @Column(name = "document_number")
-    private String documentNumber; // Aadhaar/PAN/Passport number
+    private String documentNumber;
 
     @Column(name = "issue_date")
     private LocalDate issueDate;
@@ -113,7 +110,6 @@ public class Document {
     @Column(name = "issuing_authority")
     private String issuingAuthority;
 
-    // Flags
     @Column(name = "is_favorite")
     private Boolean isFavorite = false;
 
@@ -126,14 +122,12 @@ public class Document {
     @Column(name = "offline_last_synced_at")
     private LocalDateTime offlineLastSyncedAt;
 
-    // Notes
     @Column(columnDefinition = "TEXT")
     private String notes;
 
     @Column(name = "custom_tags", columnDefinition = "text[]")
     private String[] customTags;
 
-    // Timestamps
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -144,6 +138,8 @@ public class Document {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "uploaded_by", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User uploadedBy;
 
     // Helper methods
@@ -163,16 +159,12 @@ public class Document {
     }
 
     public boolean isExpired() {
-        if (expiryDate == null) {
-            return false;
-        }
+        if (expiryDate == null) return false;
         return LocalDate.now().isAfter(expiryDate);
     }
 
     public boolean isExpiringSoon(int daysThreshold) {
-        if (expiryDate == null) {
-            return false;
-        }
+        if (expiryDate == null) return false;
         LocalDate thresholdDate = LocalDate.now().plusDays(daysThreshold);
         return expiryDate.isBefore(thresholdDate) && !isExpired();
     }
@@ -186,9 +178,7 @@ public class Document {
     }
 
     public long getDaysUntilExpiry() {
-        if (expiryDate == null) {
-            return Long.MAX_VALUE;
-        }
+        if (expiryDate == null) return Long.MAX_VALUE;
         return java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), expiryDate);
     }
 }

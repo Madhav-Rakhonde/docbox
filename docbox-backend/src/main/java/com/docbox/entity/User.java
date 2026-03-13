@@ -1,6 +1,7 @@
 package com.docbox.entity;
 
 import com.docbox.enums.UserRole;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -18,6 +19,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // FIX: Prevents proxy serialization errors when User is referenced as lazy from other entities
 public class User {
 
     @Id
@@ -46,9 +48,12 @@ public class User {
     @Column(nullable = false)
     private UserRole role = UserRole.PRIMARY_ACCOUNT;
 
-    // For SUB_ACCOUNT: references the PRIMARY_ACCOUNT they belong to
+    // LAZY is safe here — primaryAccount is only needed in specific contexts.
+    // @JsonIgnoreProperties prevents Jackson from triggering a proxy load during serialization.
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "primary_account_id")
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User primaryAccount;
 
     @Column(name = "is_active")
@@ -67,9 +72,6 @@ public class User {
 
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
-
-    // ── Notification Preferences ──────────────────────────────────────────
-    // Stored directly on the user row — no extra join needed.
 
     @Column(name = "notif_email", nullable = false)
     private Boolean notifEmail = true;

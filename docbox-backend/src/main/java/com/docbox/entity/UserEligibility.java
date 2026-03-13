@@ -1,5 +1,6 @@
 package com.docbox.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -8,7 +9,7 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 /**
- * User Eligibility Entity (NEW)
+ * User Eligibility Entity
  * Tracks which schemes a user is eligible for and has been notified about
  */
 @Entity
@@ -16,6 +17,7 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class UserEligibility {
 
     @Id
@@ -24,23 +26,27 @@ public class UserEligibility {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "passwordHash",
+            "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User user;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    // EAGER: scheme details (name, category) are always needed in eligibility responses.
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "scheme_id", nullable = false)
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
     private GovernmentScheme scheme;
 
     @Column(name = "is_eligible", nullable = false)
     private Boolean isEligible;
 
     @Column(name = "eligibility_score")
-    private Integer eligibilityScore; // 0-100 based on match
+    private Integer eligibilityScore;
 
     @Column(name = "matched_criteria", columnDefinition = "TEXT")
-    private String matchedCriteria; // JSON: {"income": true, "caste": true}
+    private String matchedCriteria;
 
     @Column(name = "missing_documents")
-    private String missingDocuments; // Comma-separated
+    private String missingDocuments;
 
     @Column(name = "notified_at")
     private LocalDateTime notifiedAt;
@@ -52,7 +58,7 @@ public class UserEligibility {
     private LocalDateTime appliedAt;
 
     @Column(name = "status")
-    private String status; // NOTIFIED, VIEWED, APPLIED
+    private String status;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
