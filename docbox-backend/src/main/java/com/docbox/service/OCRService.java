@@ -198,16 +198,19 @@ public class OCRService {
             logger.info("📸 Running Devanagari passes (eng={} words, devanagari_detected={})",
                     bestEng.getWordCount(), bestEngHasDevanagari || engAdaptiveHasDevanagari);
 
-            OcrResult hinResult      = performOCR(adaptive, getHindiTesseract(),   "Hindi");
-            OcrResult marResult      = performOCR(adaptive, getMarathiTesseract(), "Marathi");
-            OcrResult bestDevanagari = selectBestResult(hinResult, marResult);
+            // FIX-OCR-6: Merge BOTH Hindi and Marathi instead of picking one winner.
+// selectBestResult discards the losing pass entirely. On Marathi documents,
+// Hindi Tesseract often produces more tokens (garbage-padded), wins the
+// word-count race, and the Marathi pass — which contains the correctly
+// recognised expiry sentence — is silently dropped.
+// Combining both passes guarantees neither script's output is lost.
+            OcrResult hinResult = performOCR(adaptive, getHindiTesseract(),   "Hindi");
+            OcrResult marResult = performOCR(adaptive, getMarathiTesseract(), "Marathi");
+            OcrResult bestDevanagari = mergeDevanagariResults(hinResult, marResult);
 
             logger.info("📖 Devanagari OCR: {} words (Hindi={}, Marathi={})",
                     bestDevanagari.getWordCount(), hinResult.getWordCount(), marResult.getWordCount());
 
-            // FIX-OCR-4: mergeResults threshold lowered — always merge if English has any text.
-            // Previously, < 5 English words caused the English result to be silently dropped,
-            // losing ASCII-printed dates (like "18/08/2020") and document numbers.
             OcrResult merged = mergeResults(bestEng, bestDevanagari);
             logger.info("✅ Full OCR: {} words, {:.1f}% conf, lang: {}",
                     merged.getWordCount(), merged.getConfidence(), merged.getDetectedLanguage());
@@ -217,6 +220,20 @@ public class OCRService {
             logger.error("❌ Full OCR failed", ex);
             return emptyResult("unknown");
         }
+    }
+    private OcrResult mergeDevanagariResults(OcrResult hindi, OcrResult marathi) {
+        if (hindi == null || hindi.getWordCount() < 5)   return marathi != null ? marathi : emptyResult("Marathi");
+        if (marathi == null || marathi.getWordCount() < 5) return hindi;
+
+        String combined = hindi.getText() + "\n" + marathi.getText();
+        OcrResult result = new OcrResult();
+        result.setText(combined);
+        result.setWordCount(countWords(combined));
+        result.setConfidence((hindi.getConfidence() + marathi.getConfidence()) / 2.0);
+        result.setDetectedLanguage("Hindi+Marathi");
+        logger.info("🔀 Merged Hindi+Marathi: {} words (hin={}, mar={})",
+                result.getWordCount(), hindi.getWordCount(), marathi.getWordCount());
+        return result;
     }
 
     // ════════════════════════════════════════════════════════════════════════════

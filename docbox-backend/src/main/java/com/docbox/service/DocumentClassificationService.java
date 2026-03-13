@@ -390,34 +390,28 @@ public class DocumentClassificationService {
 
     // ── MARATHI EXPIRY PATTERNS ──────────────────────────────────────────────────
 
-    /**
-     * FIX-R2: Increased \s{0,5} → \s{0,15} on both gaps (year→पर्यंत and पर्यंत→वैध).
-     * FIX-R2: Relaxed trailing clause to accept "राहील", "आहे", "असेल" and sentence terminators.
-     * v6.2: Uses ALL_DEVA_MONTHS_OCR_RE (covers माच, मार्व etc.)
-     * v6.2: पर्यंत\s*च? — allows OCR to split पर्यंतच into "पर्यंत च"
-     * v6.2: वैध|बैध — ब/व OCR confusion; also accepts राहील directly as sentence-end cue
-     */
+
     private static final Pattern MARATHI_PARYANT_VALID = Pattern.compile(
             "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
                     "\\s{0,15}(?:पर्यंत\\s*(?:च)?|परयत|पर्यन्त)" +
-                    "\\s{0,15}(?:वैध|बैध|valid|राहील)" +
+                    "\\s{0,15}(?:वैध|बैध|वैच|valid|राहील)" +
                     "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private static final Pattern MARATHI_PARYANT_NUMERIC = Pattern.compile(
             "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
-                    "\\s{0,15}(?:पर्यंत(?:च)?)\\s{0,15}(?:वैध|valid)" +
+                    "\\s{0,15}(?:पर्यंत(?:च)?)\\s{0,15}(?:वैध|बैध|वैच|valid)" +
                     "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern MARATHI_DINANK_PARYANT = Pattern.compile(
             "(?:दिनांक|ता\\.)\\s*([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
-                    "\\s{0,10}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|valid)",
+                    "\\s{0,10}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|बैध|वैच|valid)",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern MARATHI_DINANK_NUMERIC_PARYANT = Pattern.compile(
             "(?:दिनांक|ता\\.)\\s*([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
-                    "\\s{0,10}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|valid)",
+                    "\\s{0,10}(?:पर्यंत(?:च)?)\\s{0,5}(?:वैध|बैध|वैच|valid)",
             Pattern.UNICODE_CHARACTER_CLASS);
 
     private static final Pattern MARATHI_MUDAT_PATTERN = Pattern.compile(
@@ -432,6 +426,7 @@ public class DocumentClassificationService {
             Pattern.UNICODE_CHARACTER_CLASS);
 
     // FIX-H: gap increased from {0,40} to {0,80}
+    // FIX-H: gap increased from {0,40} to {0,80}
     private static final Pattern MARATHI_VALIDITY_PHRASE = Pattern.compile(
             "(?:हे|सदरील|या)[\\s\\S]{0,12}(?:प्रमाणपत्र|दाखला|दस्तऐवज)" +
                     "[^०-९\\d]{0,80}" +
@@ -441,31 +436,15 @@ public class DocumentClassificationService {
                     "[^०-९\\d]{0,60}" +
                     "(?:पर्यंत(?:च)?)" +
                     "\\s{0,15}" +
-                    "(?:वैध|valid)",
+                    "(?:वैध|बैध|वैच|valid)",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern MARATHI_VALID_COMPACT = Pattern.compile(
             "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_RE + ")\\s*([०-९\\d]{4})" +
-                    "\\s{0,30}पर्यंत(?:च)?\\s{0,5}(?:वैध|valid)",
+                    "\\s{0,30}पर्यंत(?:च)?\\s{0,5}(?:वैध|बैध|वैच|valid)",
             Pattern.UNICODE_CHARACTER_CLASS);
 
-    /**
-     * v6.2 SAFETY NET: YEAR_BEFORE_PARYANT
-     *
-     * Fires when the month name is so corrupted that ALL_DEVA_MONTHS_OCR_RE cannot match it,
-     * but the day number, year, and the word पर्यंत are still recognisable.
-     *
-     * Pattern: DD <anything-not-a-digit> YYYY  (lookahead: पर्यंत within 60 chars)
-     * Example: "हे प्रमाणपत्र ३१ xxxxxxxxxxx २०२१ पर्यंतच वैध राहील."
-     *           → groups: day=३१, year=२०२१, month derived from position (unreliable but better than null)
-     *
-     * WARNING: This pattern does NOT capture the month name (it's garbled).
-     * The calling code (extractExpiryMarathiDirect) must handle groups(0)=day, groups(1)=year
-     * and attempt a month lookup from the surrounding position or default the month to 03 (March)
-     * only when the document has already been scored as an income certificate dated in Q1.
-     * In practice, for this document the safety net will not be needed if MARATHI_PARYANT_VALID
-     * fires — it is here as the last resort before the relative-date extractor.
-     */
+
     private static final Pattern MARATHI_YEAR_BEFORE_PARYANT = Pattern.compile(
             "([०-९\\d]{1,2})\\s+\\S+\\s+([०-९\\d]{4})" +
                     "(?=[\\s\\S]{0,60}(?:पर्यंत|परयत|पर्यन्त))",
@@ -479,25 +458,29 @@ public class DocumentClassificationService {
 
 
     private static final Pattern MARATHI_HE_PRAMANAPTR_SENTENCE = Pattern.compile(
-            "(?:हे|सदरचा|सदरील)\\s+(?:प्रमाणपत्र|दाखला)" +
-                    "[\\s\\S]{0,120}?" +                              // FIX-GAP: was {0,20}?
+            // FIX-B: हे\s*प्रमाण(?:पत्र|पत्न|पत्ण) handles OCR space-drop AND र→न/ण corruption.
+            // Was: (?:हे|सदरचा|सदरील)\\s+(?:प्रमाणपत्र|दाखला)
+            "(?:हे\\s*प्रमाण(?:पत्र|पत्न|पत्ण)" +
+                    "|हे\\s+(?:प्रमाणपत्र|दाखला)" +
+                    "|सदरचा\\s+(?:दाखला|दखला)" +
+                    "|सदरील\\s+(?:प्रमाणपत्र|दाखला))" +
+                    "[\\s\\S]{0,120}?" +
                     "(?:" +
-                    // Branch A: "DD MONTH YYYY" — uses OCR-hardened month regex
+                    // Branch A: "DD MONTH YYYY"
                     "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
                     "|" +
                     // Branch B: "DD/MM/YYYY"
                     "([०-९\\d]{1,2})[/\\-.]([०-९\\d]{1,2})[/\\-.]([०-९\\d]{4})" +
                     ")" +
                     "\\s{0,15}(?:पर्यंत(?:च)?)" +
-                    "\\s{0,15}(?:वैध|बैध|valid)" +
+                    "\\s{0,15}(?:वैध|बैध|वैच|valid)" +
                     "(?:\\s+(?:राहील|आहे|असेल|च)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
-
 
     private static final Pattern MARATHI_PARYANTACH_DIRECT = Pattern.compile(
             "([०-९\\d]{1,2})\\s*(" + ALL_DEVA_MONTHS_OCR_RE + ")\\s*([०-९\\d]{4})" +
                     "\\s{0,15}पर्यंतच" +
-                    "\\s{0,15}(?:वैध|बैध|valid)" +
+                    "\\s{0,15}(?:वैध|बैध|वैच|valid)" +
                     "(?:\\s+(?:राहील|आहे|असेल)|[.।])?",
             Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
     // ── HINDI EXPIRY PATTERNS ────────────────────────────────────────────────────
@@ -541,21 +524,7 @@ public class DocumentClassificationService {
             "(?:आगामी\\s+)?(\\d{1,2}|एक|दो|तीन|चार|पाँच)\\s+वर्षों?\\s+(?:के\\s+लिए|की\\s+अवधि\\s+के\\s+लिए)\\s+(?:मान्य|वैध)",
             Pattern.UNICODE_CHARACTER_CLASS);
 
-    /**
-     * FIX-R1 (PRIMARY FIX): Added negative lookahead to prevent matching the document TITLE
-     * "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" (income certificate for N years) as a
-     * relative validity expression. Without this guard, the pattern matched "३" from
-     * "३ वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" and used the issue date as base, producing
-     * a completely wrong expiry date (e.g., 18/08/2023 instead of 31/03/2021).
-     *
-     * The negative lookahead blocks matching when "वर्षांसाठी" is immediately followed
-     * (with optional whitespace) by income/certificate context words.
-     *
-     * Covers both OCR variants:
-     *   - Merged:   "वर्षांसाठीउत्पन्नाचे"   → blocked by lookahead (no space needed)
-     *   - Spaced:   "वर्षांसाठी उत्पन्नाचे"   → blocked by lookahead
-     *   - Genuine:  "वर्षांसाठी मान्य आहे।"   → passes through correctly
-     */
+
     private static final Pattern MARATHI_RELATIVE_VARSH = Pattern.compile(
             "([०-९\\d]+)\\s*" +
                     "(?:वर्षांसाठी|वर्षासाठी|वर्षे\\s+साठी|वर्षाकरिता)" +
@@ -580,7 +549,13 @@ public class DocumentClassificationService {
             "तक वैध है",
             "तक वैध",
             "तक मान्य है",
-            "तक मान्य"
+            "तक मान्य",
+            // FIX-A: वैच variants — Tesseract ध→च glyph confusion on this document
+            "पर्यंतच वैच राहील",
+            "पर्यंत वैच राहील",
+            "पर्यंतच वैच",
+            "पर्यंत वैच",
+            "वैच राहील"
     );
 
     /** Marathi/Hindi label keywords where date FOLLOWS (after colon/space). */
@@ -593,12 +568,7 @@ public class DocumentClassificationService {
             "नवीनीकरण तिथि:", "नवीनीकरण तिथि :"
     );
 
-    /**
-     * FIX-C: Removed "valid for" (relative, not absolute date keyword).
-     * FIX-V: Removed "valid from.*?to" (was regex-in-indexOf, never matched).
-     * FIX-S: Removed "this certificate is valid" / "this document is valid"
-     *        (ambiguous — could precede "for N years"). Handled via CERTIFICATE_VALIDITY_PHRASE.
-     */
+
     private static final List<String> EXPIRY_KW_DATE_AFTER = Arrays.asList(
             // Most specific, longest first to avoid prefix shadowing
             "date of expiry", "date of expiration", "expiry date", "expiration date",
@@ -1772,6 +1742,8 @@ public class DocumentClassificationService {
         if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
         if (lower.contains("below poverty line") || original.contains("दारिद्र्यरेषा")) s += 20;
         // FIX-R4: "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" title pattern
+        if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
+        if (original.contains("वैच राहील") && original.contains("उत्पन्न")) s += 30; // FIX-A: वैच variant
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्नाचे")) s += 20;
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्न"))    s += 15;
         return Math.min(130, s);
