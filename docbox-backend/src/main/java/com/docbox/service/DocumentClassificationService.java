@@ -9,8 +9,6 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 
 
@@ -764,7 +762,13 @@ public class DocumentClassificationService {
         int income   = scores.getOrDefault("Income Certificate", 0);
         int caste    = scores.getOrDefault("Caste Certificate", 0);
         int domicile = scores.getOrDefault("Domicile Certificate", 0);
+        int ration   = scores.getOrDefault("Ration Card", 0);
+        int bills    = scores.getOrDefault("Bills & Receipts", 0);
+        int birth    = scores.getOrDefault("Birth Certificate", 0);
+        int marriage = scores.getOrDefault("Marriage Certificate", 0);
+        int employ   = scores.getOrDefault("Employment Documents", 0);
 
+        // ── ID Document cross-suppression (original) ─────────────────────────
         if (aadhaar > 80) scores.computeIfPresent("PAN Card", (k, v) -> Math.min(v, 30));
         if (PASSPORT_MRZ_LINE1.matcher(original).find() || PASSPORT_MRZ_LINE2.matcher(original).find()) {
             scores.computeIfPresent("Driving License", (k, v) -> v / 4);
@@ -783,6 +787,38 @@ public class DocumentClassificationService {
             scores.computeIfPresent("Passport", (k, v) -> (int)(v * 0.2));
         if (aadhaar > pan && aadhaar > 80 && pan < 60)
             scores.computeIfPresent("PAN Card", (k, v) -> (int)(v * 0.5));
+
+        // ── Certificate vs generic-category suppression (BUG-FIX) ────────────
+        // When a government certificate wins clearly, suppress weak generic categories
+        // that pick up incidental words (stamps, fees, addresses, poverty-line mentions).
+        int certMax = Math.max(Math.max(domicile, caste), Math.max(income, Math.max(birth, marriage)));
+        if (certMax >= 50) {
+            // Suppress Bills & Receipts — domicile/income certs have stamp-fee, "receipt" text
+            if (bills < certMax - 25)
+                scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.4));
+            // Suppress Ration Card — income/domicile certs mention BPL, APL, family details
+            if (ration < certMax - 25)
+                scores.computeIfPresent("Ration Card", (k, v) -> (int)(v * 0.4));
+        }
+        // Domicile specifically: suppress ration card when domicile is strong
+        if (domicile >= 55 && ration < domicile) {
+            scores.computeIfPresent("Ration Card", (k, v) -> (int)(v * 0.35));
+            scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.35));
+        }
+        // Income Certificate: suppress Employment docs (both mention salary/dept)
+        if (income >= 55 && employ < income) {
+            scores.computeIfPresent("Employment Documents", (k, v) -> (int)(v * 0.5));
+        }
+        // Caste Certificate: suppress Domicile when caste is already being suppressed above,
+        // and also suppress Bills (caste certs have collector office fee receipts)
+        if (caste >= 60) {
+            scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.4));
+            scores.computeIfPresent("Ration Card",      (k, v) -> (int)(v * 0.4));
+        }
+        // Birth/Marriage certificates: suppress bills (registration fee receipts attached)
+        if (birth >= 50 || marriage >= 50) {
+            scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.45));
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -1828,7 +1864,6 @@ public class DocumentClassificationService {
         if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
         if (lower.contains("below poverty line") || original.contains("दारिद्र्यरेषा")) s += 20;
         // FIX-R4: "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" title pattern
-        if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
         if (original.contains("वैच राहील") && original.contains("उत्पन्न")) s += 30; // FIX-A: वैच variant
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्नाचे")) s += 20;
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्न"))    s += 15;
@@ -1843,11 +1878,21 @@ public class DocumentClassificationService {
         if (DOMICILE_COLLECTOR_OFFICE.matcher(lower).find())                     s += 55;
         if (DOMICILE_COLLECTOR_SEAL.matcher(original).find())                    s += 45;
         if (DOMICILE_FILE_NO.matcher(original).find())                           s += 35;
+        // Marathi domicile signals
         if (original.contains("अधिवास प्रमाणपत्र") || original.contains("रहिवासी प्रमाणपत्र")) s += 65;
         if (original.contains("मूल निवासी प्रमाण पत्र") || original.contains("निवास प्रमाण पत्र")) s += 60;
+        if (original.contains("रहिवास दाखला") || original.contains("रहिवास प्रमाणपत्र"))       s += 65;
+        if (original.contains("अधिवास दाखला"))                                  s += 65;
+        if (original.contains("वास्तव्य") && (original.contains("प्रमाणपत्र") || original.contains("दाखला"))) s += 55;
+        if (original.contains("कायमचा रहिवासी") || original.contains("कायमस्वरूपी रहिवासी"))   s += 60;
+        if (original.contains("राज्याचा रहिवासी") || original.contains("महाराष्ट्राचा रहिवासी")) s += 55;
+        // Hindi domicile signals
+        if (original.contains("निवास प्रमाण पत्र") || original.contains("मूल निवास प्रमाण पत्र")) s += 60;
+        if (original.contains("स्थायी निवासी") || original.contains("स्थायी रूप से निवास"))    s += 55;
+        if (lower.contains("domicile") && !lower.contains("domicile certificate"))              s += 30;
         if (lower.contains("premises no"))                                       s += 25;
         if (DOMICILE_IAS_TAG.matcher(original).find())                           s += 20;
-        if (lower.contains("resident of state") || lower.contains("resident of the state")) s += 20;
+        if (lower.contains("resident of state") || lower.contains("resident of the state"))     s += 20;
         return Math.min(160, s);
     }
 
@@ -1873,13 +1918,20 @@ public class DocumentClassificationService {
 
     private int scoreRationCard(String lower, String original) {
         int s = 0;
-        if (lower.contains("ration card"))                                       s += 55;
+        if (lower.contains("ration card"))                                        s += 55;
         if (original.contains("राशन कार्ड") || original.contains("शिधापत्रिका")) s += 50;
-        if (lower.contains("public distribution system"))                         s += 35;
-        if (lower.contains("food") && lower.contains("civil supplies"))          s += 25;
-        if (lower.contains("fair price shop") || lower.contains("fpds"))         s += 30;
+        if (lower.contains("public distribution system"))                          s += 35;
+        if (lower.contains("food") && lower.contains("civil supplies"))           s += 25;
+        if (lower.contains("fair price shop") || lower.contains("fpds"))          s += 30;
         if (original.contains("अन्न पुरवठा") || original.contains("स्वस्त धान्य")) s += 35;
-        if (lower.contains("bpl") || lower.contains("apl") || lower.contains("antyodaya")) s += 25;
+        // BUG-FIX: "bpl"/"apl" alone fires on domicile certs, income certs mentioning poverty line.
+        // Require "ration" context or another PDS signal alongside.
+        boolean hasRationCtx = lower.contains("ration") || lower.contains("शिधा")
+                || lower.contains("fair price") || lower.contains("pds");
+        if (hasRationCtx && (lower.contains("bpl") || lower.contains("apl") || lower.contains("antyodaya"))) s += 25;
+        // antyodaya is ration-specific enough to score alone
+        if (lower.contains("antyodaya anna yojana"))                              s += 35;
+        if (original.contains("प्रधानमंत्री गरीब") && original.contains("अन्न"))  s += 30;
         return Math.min(110, s);
     }
 
@@ -1933,27 +1985,37 @@ public class DocumentClassificationService {
     private int scoreMedical(String lower, String original) {
         int s = 0;
         if (lower.contains("medical report") || lower.contains("medical certificate")) s += 45;
-        if (lower.contains("prescription"))              s += 40;
-        if (lower.contains("pathology") || lower.contains("laboratory report"))  s += 40;
-        if (lower.contains("diagnosis") || lower.contains("radiology"))          s += 28;
-        if (lower.contains("patient name"))              s += 22;
-        if (lower.contains("dr.") || lower.contains("m.b.b.s") || lower.contains("mbbs")) s += 20;
-        if (original.contains("वैद्यकीय") || original.contains("रुग्णालय")) s += 30;
-        if (lower.contains("hospital") || lower.contains("clinic")) s += 15;
+        if (lower.contains("prescription"))               s += 40;
+        if (lower.contains("pathology") || lower.contains("laboratory report"))   s += 40;
+        if (lower.contains("diagnosis") || lower.contains("radiology"))           s += 28;
+        if (lower.contains("patient name"))               s += 22;
+        // BUG-FIX: "dr." alone fires on government certs where the signing officer has a doctorate.
+        // "hospital"/"clinic" alone fires on address lines. Require medical context alongside.
+        boolean hasMedCtx = lower.contains("patient") || lower.contains("diagnosis")
+                || lower.contains("prescription") || lower.contains("treatment")
+                || lower.contains("hospital") || lower.contains("clinic")
+                || lower.contains("pathology") || lower.contains("laboratory");
+        if (hasMedCtx && (lower.contains("dr.") || lower.contains("m.b.b.s") || lower.contains("mbbs"))) s += 20;
+        if (original.contains("वैद्यकीय") || original.contains("रुग्णालय"))      s += 30;
+        if (hasMedCtx && (lower.contains("hospital") || lower.contains("clinic"))) s += 15;
         if (lower.contains("blood group") || lower.contains("x-ray") || lower.contains("mri")) s += 20;
         return Math.min(110, s);
     }
 
     private int scoreProperty(String lower, String original) {
         int s = 0;
-        if (lower.contains("sale deed"))                                         s += 55;
-        if (lower.contains("registry") && lower.contains("property"))           s += 45;
-        if (lower.contains("7/12 extract") || lower.contains("seven twelve"))   s += 55;
-        if (lower.contains("eight-a") || lower.contains("8-a"))                 s += 45;
-        if (lower.contains("survey number"))                                     s += 28;
-        if (original.contains("सातबारा") || original.contains("७/१२") || original.contains("खाते")) s += 40;
-        if (lower.contains("khata") || lower.contains("khatha"))                s += 30;
-        if (lower.contains("mutation") || lower.contains("fard"))               s += 25;
+        if (lower.contains("sale deed"))                                          s += 55;
+        if (lower.contains("registry") && lower.contains("property"))            s += 45;
+        if (lower.contains("7/12 extract") || lower.contains("seven twelve"))    s += 55;
+        if (lower.contains("eight-a") || lower.contains("8-a"))                  s += 45;
+        if (lower.contains("survey number"))                                      s += 28;
+        if (original.contains("सातबारा") || original.contains("७/१२"))          s += 40;
+        // BUG-FIX: "खाते" (meaning account/record) is present on many govt letterheads.
+        // Only score it when paired with property-specific terms.
+        if (original.contains("खाते") && (original.contains("सातबारा") || original.contains("७/१२")
+                || lower.contains("survey") || lower.contains("land record")))   s += 30;
+        if (lower.contains("khata") || lower.contains("khatha"))                 s += 30;
+        if (lower.contains("mutation") || lower.contains("fard"))                s += 25;
         return Math.min(110, s);
     }
 
@@ -1970,26 +2032,39 @@ public class DocumentClassificationService {
 
     private int scoreFinancial(String lower, String original) {
         int s = 0;
-        if (lower.contains("bank statement"))     s += 55;
-        if (lower.contains("account statement"))  s += 50;
-        if (lower.contains("ifsc") || lower.contains("account number")) s += 35;
+        if (lower.contains("bank statement"))      s += 55;
+        if (lower.contains("account statement"))   s += 50;
         if (lower.contains("transaction history") || lower.contains("passbook")) s += 28;
-        if (lower.contains("debit") && lower.contains("credit")) s += 20;
+        if (lower.contains("debit") && lower.contains("credit"))                 s += 20;
         if (lower.contains("cheque") || lower.contains("neft") || lower.contains("rtgs")) s += 20;
+        // BUG-FIX: "account number" and "ifsc" appear on govt certificates that require
+        // bank account details for DBT. Require bank-statement context alongside.
+        boolean hasBankCtx = lower.contains("statement") || lower.contains("transaction")
+                || lower.contains("passbook") || lower.contains("debit") || lower.contains("credit");
+        if (hasBankCtx && (lower.contains("ifsc") || lower.contains("account number"))) s += 35;
         return Math.min(110, s);
     }
 
     private int scoreBills(String lower, String original) {
         int s = 0;
-        if (lower.contains("fee receipt") || lower.contains("fees receipt"))    s += 60;
+        if (lower.contains("fee receipt") || lower.contains("fees receipt"))     s += 60;
         if (lower.contains("tuition fee") || lower.contains("college fee") || lower.contains("school fee")) s += 50;
-        if (lower.contains("tax invoice") || lower.contains("invoice"))         s += 45;
-        if (lower.contains("bill"))                                              s += 38;
-        if (lower.contains("receipt"))                                           s += 32;
-        if (lower.contains("payment") || lower.contains("paid"))                s += 25;
-        if (lower.contains("gst") || lower.contains("gstin"))                   s += 28;
-        if (lower.contains("ticket") || lower.contains("fare"))                 s += 30;
-        if (lower.contains("electricity bill") || lower.contains("water bill")) s += 40;
+        if (lower.contains("tax invoice") || lower.contains("invoice"))          s += 45;
+        // BUG-FIX: "bill" and "receipt" alone fire on too many unrelated docs (domicile stamp fee,
+        // court fee receipts, etc.). Require at least one financial context signal alongside them.
+        boolean hasBill    = lower.contains("bill");
+        boolean hasReceipt = lower.contains("receipt");
+        boolean hasFinCtx  = lower.contains("payment") || lower.contains("paid") || lower.contains("amount")
+                || lower.contains("rs.") || lower.contains("₹") || lower.contains("rupees")
+                || lower.contains("electricity") || lower.contains("water") || lower.contains("gas")
+                || lower.contains("telephone") || lower.contains("mobile");
+        if (hasBill    && hasFinCtx) s += 35;
+        if (hasReceipt && hasFinCtx) s += 28;
+        if (lower.contains("payment") && hasFinCtx)                              s += 20;
+        if (lower.contains("gst") || lower.contains("gstin"))                    s += 28;
+        if (lower.contains("ticket") || lower.contains("fare"))                  s += 30;
+        if (lower.contains("electricity bill") || lower.contains("water bill"))  s += 40;
+        if (lower.contains("utility bill"))                                       s += 35;
         return Math.min(110, s);
     }
 
