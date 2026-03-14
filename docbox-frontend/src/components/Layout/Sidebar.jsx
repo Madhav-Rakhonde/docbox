@@ -7,7 +7,8 @@ import {
 } from '@mui/material';
 import {
   Dashboard, Description, Analytics, People, Settings,
-  Notifications, Security, FolderShared, CardGiftcard, FiberManualRecord,
+  Notifications, Security, FolderShared, CardGiftcard,
+  FiberManualRecord, WifiOff, CloudDone,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -55,32 +56,45 @@ const LogoMark = () => (
 );
 
 const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
-  const navigate       = useNavigate();
-  const location       = useLocation();
-  const { user }       = useAuth();
-  const [notificationCount, setNotificationCount] = useState(0);
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const { user }  = useAuth();
 
-  // ── Initial load via API ──────────────────────────────────────────────────
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // ── Online / offline ────────────────────────────────────────────────────
+  useEffect(() => {
+    const onOnline  = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online',  onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online',  onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
+
+  // ── Notification count ──────────────────────────────────────────────────
   const loadNotificationCount = async () => {
     try {
       const response = await api.get('/notifications/unread/count');
       if (response.data.success) {
-        // Backend returns { data: <Long> } — handle both shapes defensively
         const raw = response.data.data;
         setNotificationCount(typeof raw === 'object' ? (raw?.count ?? 0) : (raw ?? 0));
       }
-    } catch { /* silent */ }
+    } catch { /* silent — may be offline */ }
   };
 
   useEffect(() => {
     loadNotificationCount();
 
-    // ── Listen for instant updates dispatched by Notifications.jsx ──────────
     const handleUnreadChange = (e) => setNotificationCount(e.detail.count);
     window.addEventListener('notif-unread-changed', handleUnreadChange);
 
-    // ── Periodic background refresh (every 30 s) ─────────────────────────
-    const interval = setInterval(loadNotificationCount, 30000);
+    const interval = setInterval(() => {
+      if (navigator.onLine) loadNotificationCount();
+    }, 30000);
 
     return () => {
       window.removeEventListener('notif-unread-changed', handleUnreadChange);
@@ -92,18 +106,31 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
   const isActive = (path) => location.pathname === path;
 
   const drawer = (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0F172A', color: '#94A3B8', overflow: 'hidden' }}>
+    <Box sx={{
+      display: 'flex', flexDirection: 'column', height: '100%',
+      background: '#0F172A', color: '#94A3B8', overflow: 'hidden',
+    }}>
 
       {/* ── Brand ── */}
-      <Box sx={{ px: 2.5, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.5,
-        borderBottom: '1px solid rgba(255,255,255,0.07)', minHeight: 64 }}>
+      <Box sx={{
+        px: 2.5, py: 2.5,
+        display: 'flex', alignItems: 'center', gap: 1.5,
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        minHeight: 64,
+      }}>
         <LogoMark />
         <Box>
-          <Typography sx={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: '1.125rem',
-            color: '#F8FAFC', lineHeight: 1, letterSpacing: '-0.02em' }}>
+          <Typography sx={{
+            fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
+            fontSize: '1.125rem', color: '#F8FAFC',
+            lineHeight: 1, letterSpacing: '-0.02em',
+          }}>
             Doc<span style={{ color: '#818CF8', fontWeight: 400 }}>Box</span>
           </Typography>
-          <Typography sx={{ fontSize: '0.65rem', color: '#475569', mt: 0.2, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          <Typography sx={{
+            fontSize: '0.65rem', color: '#475569', mt: 0.2,
+            letterSpacing: '0.06em', textTransform: 'uppercase',
+          }}>
             Document Manager
           </Typography>
         </Box>
@@ -111,19 +138,31 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
 
       {/* ── User Profile ── */}
       <Box sx={{ px: 2, py: 2, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: '10px',
-          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          <Avatar sx={{ width: 36, height: 36, background: 'linear-gradient(135deg, #6366F1 0%, #818CF8 100%)',
-            fontSize: '0.9rem', fontWeight: 700, flexShrink: 0 }}>
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1.5,
+          p: 1.5, borderRadius: '10px',
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.07)',
+        }}>
+          <Avatar sx={{
+            width: 36, height: 36, flexShrink: 0,
+            background: 'linear-gradient(135deg, #6366F1 0%, #818CF8 100%)',
+            fontSize: '0.9rem', fontWeight: 700,
+          }}>
             {user?.fullName?.charAt(0)?.toUpperCase()}
           </Avatar>
           <Box sx={{ overflow: 'hidden' }}>
-            <Typography sx={{ fontSize: '0.875rem', fontWeight: 600, color: '#F1F5F9', lineHeight: 1.2,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <Typography sx={{
+              fontSize: '0.875rem', fontWeight: 600, color: '#F1F5F9',
+              lineHeight: 1.2, whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
               {user?.fullName}
             </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: '#475569', whiteSpace: 'nowrap',
-              overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <Typography sx={{
+              fontSize: '0.72rem', color: '#475569',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
               {user?.email}
             </Typography>
           </Box>
@@ -134,8 +173,11 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
       <Box sx={{ flex: 1, overflowY: 'auto', py: 1.5, px: 1 }}>
         {NAV_GROUPS.map((group) => (
           <Box key={group.label} sx={{ mb: 0.5 }}>
-            <Typography sx={{ px: 1.5, py: 0.75, fontSize: '0.65rem', fontWeight: 700,
-              letterSpacing: '0.1em', textTransform: 'uppercase', color: '#334155' }}>
+            <Typography sx={{
+              px: 1.5, py: 0.75,
+              fontSize: '0.65rem', fontWeight: 700,
+              letterSpacing: '0.1em', textTransform: 'uppercase', color: '#334155',
+            }}>
               {group.label}
             </Typography>
 
@@ -151,30 +193,51 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
                         borderRadius: '8px', px: 1.5, py: 1,
                         background: active ? 'rgba(99,102,241,0.18)' : 'transparent',
                         border: active ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
-                        '&:hover': { background: active ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.05)' },
+                        '&:hover': {
+                          background: active
+                            ? 'rgba(99,102,241,0.22)'
+                            : 'rgba(255,255,255,0.05)',
+                        },
                         transition: 'all 150ms ease',
                       }}
                     >
                       <ListItemIcon sx={{ minWidth: 36 }}>
                         {item.isNotification && notificationCount > 0 ? (
-                          <Badge badgeContent={notificationCount} color="error" max={99}
-                            sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
-                            <Icon sx={{ fontSize: 18, color: active ? '#818CF8' : '#475569', transition: 'color 150ms' }} />
+                          <Badge
+                            badgeContent={notificationCount}
+                            color="error"
+                            max={99}
+                            sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}
+                          >
+                            <Icon sx={{
+                              fontSize: 18,
+                              color: active ? '#818CF8' : '#475569',
+                              transition: 'color 150ms',
+                            }} />
                           </Badge>
                         ) : (
-                          <Icon sx={{ fontSize: 18, color: active ? '#818CF8' : '#475569', transition: 'color 150ms' }} />
+                          <Icon sx={{
+                            fontSize: 18,
+                            color: active ? '#818CF8' : '#475569',
+                            transition: 'color 150ms',
+                          }} />
                         )}
                       </ListItemIcon>
                       <ListItemText
                         primary={item.text}
                         primaryTypographyProps={{
-                          fontSize: '0.875rem', fontWeight: active ? 600 : 450,
+                          fontSize: '0.875rem',
+                          fontWeight: active ? 600 : 450,
                           color: active ? '#F1F5F9' : '#64748B',
-                          fontFamily: "'DM Sans', sans-serif", transition: 'color 150ms',
+                          fontFamily: "'DM Sans', sans-serif",
+                          transition: 'color 150ms',
                         }}
                       />
                       {active && (
-                        <Box sx={{ width: 4, height: 4, borderRadius: '50%', background: '#818CF8', flexShrink: 0 }} />
+                        <Box sx={{
+                          width: 4, height: 4, borderRadius: '50%',
+                          background: '#818CF8', flexShrink: 0,
+                        }} />
                       )}
                     </ListItemButton>
                   </ListItem>
@@ -185,35 +248,76 @@ const Sidebar = ({ drawerWidth, mobileOpen, onClose, isMobile }) => {
         ))}
       </Box>
 
-      {/* ── Status Footer ── */}
+      {/* ── Status Footer — real online/offline state ── */}
       <Box sx={{ px: 2, py: 2, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderRadius: '8px',
-          background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-          <FiberManualRecord sx={{ fontSize: 8, color: '#10B981', animation: 'pulse-dot 2s infinite' }} />
-          <Typography sx={{ fontSize: '0.75rem', color: '#10B981', fontWeight: 500 }}>
-            Offline Mode Ready
-          </Typography>
-        </Box>
+        <Tooltip
+          title={isOnline ? 'Connected to server' : 'No internet — cached documents available'}
+          placement="top"
+          arrow
+        >
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1,
+            px: 1.5, py: 1, borderRadius: '8px',
+            background: isOnline
+              ? 'rgba(16,185,129,0.08)'
+              : 'rgba(99,102,241,0.1)',
+            border: isOnline
+              ? '1px solid rgba(16,185,129,0.2)'
+              : '1px solid rgba(99,102,241,0.25)',
+            transition: 'all 400ms ease',
+            cursor: 'default',
+          }}>
+            {isOnline ? (
+              <>
+                <FiberManualRecord sx={{
+                  fontSize: 8, color: '#10B981',
+                  animation: 'pulse-dot 2s infinite',
+                }} />
+                <Typography sx={{ fontSize: '0.75rem', color: '#10B981', fontWeight: 500 }}>
+                  Online
+                </Typography>
+              </>
+            ) : (
+              <>
+                <WifiOff sx={{ fontSize: 13, color: '#818CF8' }} />
+                <Typography sx={{ fontSize: '0.75rem', color: '#818CF8', fontWeight: 500 }}>
+                  Offline — cached mode
+                </Typography>
+              </>
+            )}
+          </Box>
+        </Tooltip>
       </Box>
     </Box>
   );
 
   const drawerSx = {
-    '& .MuiDrawer-paper': { width: drawerWidth, border: 'none', boxShadow: '4px 0 24px rgba(0,0,0,0.2)' },
+    '& .MuiDrawer-paper': {
+      width: drawerWidth,
+      border: 'none',
+      boxShadow: '4px 0 24px rgba(0,0,0,0.2)',
+    },
   };
 
   return (
     <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
       {isMobile && (
-        <Drawer variant="temporary" open={mobileOpen} onClose={onClose}
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={onClose}
           ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: 'block', md: 'none' }, ...drawerSx }}>
+          sx={{ display: { xs: 'block', md: 'none' }, ...drawerSx }}
+        >
           {drawer}
         </Drawer>
       )}
       {!isMobile && (
-        <Drawer variant="permanent" open
-          sx={{ display: { xs: 'none', md: 'block' }, ...drawerSx }}>
+        <Drawer
+          variant="permanent"
+          open
+          sx={{ display: { xs: 'none', md: 'block' }, ...drawerSx }}
+        >
           {drawer}
         </Drawer>
       )}

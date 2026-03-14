@@ -756,6 +756,29 @@ public class DocumentClassificationService {
     // CROSS-CATEGORY ARBITRATION
     // ════════════════════════════════════════════════════════════════════════════
     private void arbitrate(Map<String, Integer> scores, String lower, String original) {
+
+        // ── PRE-PASS: Hard suppression for Maharashtra Age/Nationality/Domicile cert ──
+        // This certificate explicitly lists "Ration Card", "Birth Certificate", "UID"
+        // etc. as PROOFS SUBMITTED. Those mentions must not classify the document as
+        // those types. Detect the certificate by its title or definitive body phrases,
+        // then zero-out all the proof-list categories and floor domicile score.
+        boolean isDomicileTitleDoc =
+                lower.contains("age, nationality and domicile") ||
+                        lower.contains("domiciled in the state of")     ||
+                        (lower.contains("citizen of india") && lower.contains("domicile")) ||
+                        (lower.contains("particulars of proofs") && lower.contains("domicile"));
+
+        if (isDomicileTitleDoc) {
+            scores.put("Ration Card",          0);
+            scores.put("Aadhaar Card",         0);
+            scores.put("Birth Certificate",    0);
+            scores.put("Bills & Receipts",     0);
+            scores.put("Employment Documents", 0);
+            // Floor: guarantee Domicile Certificate wins even if scorer missed signals
+            scores.merge("Domicile Certificate", 80, Math::max);
+        }
+
+        // ── existing code below — unchanged ──────────────────────────────────────
         int aadhaar  = scores.getOrDefault("Aadhaar Card", 0);
         int pan      = scores.getOrDefault("PAN Card", 0);
         int dl       = scores.getOrDefault("Driving License", 0);
@@ -788,34 +811,25 @@ public class DocumentClassificationService {
         if (aadhaar > pan && aadhaar > 80 && pan < 60)
             scores.computeIfPresent("PAN Card", (k, v) -> (int)(v * 0.5));
 
-        // ── Certificate vs generic-category suppression (BUG-FIX) ────────────
-        // When a government certificate wins clearly, suppress weak generic categories
-        // that pick up incidental words (stamps, fees, addresses, poverty-line mentions).
+        // ── Certificate vs generic-category suppression ───────────────────────
         int certMax = Math.max(Math.max(domicile, caste), Math.max(income, Math.max(birth, marriage)));
         if (certMax >= 50) {
-            // Suppress Bills & Receipts — domicile/income certs have stamp-fee, "receipt" text
             if (bills < certMax - 25)
                 scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.4));
-            // Suppress Ration Card — income/domicile certs mention BPL, APL, family details
             if (ration < certMax - 25)
                 scores.computeIfPresent("Ration Card", (k, v) -> (int)(v * 0.4));
         }
-        // Domicile specifically: suppress ration card when domicile is strong
         if (domicile >= 55 && ration < domicile) {
-            scores.computeIfPresent("Ration Card", (k, v) -> (int)(v * 0.35));
+            scores.computeIfPresent("Ration Card",      (k, v) -> (int)(v * 0.35));
             scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.35));
         }
-        // Income Certificate: suppress Employment docs (both mention salary/dept)
         if (income >= 55 && employ < income) {
             scores.computeIfPresent("Employment Documents", (k, v) -> (int)(v * 0.5));
         }
-        // Caste Certificate: suppress Domicile when caste is already being suppressed above,
-        // and also suppress Bills (caste certs have collector office fee receipts)
         if (caste >= 60) {
             scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.4));
             scores.computeIfPresent("Ration Card",      (k, v) -> (int)(v * 0.4));
         }
-        // Birth/Marriage certificates: suppress bills (registration fee receipts attached)
         if (birth >= 50 || marriage >= 50) {
             scores.computeIfPresent("Bills & Receipts", (k, v) -> (int)(v * 0.45));
         }
@@ -1739,6 +1753,16 @@ public class DocumentClassificationService {
         if (lower.contains("enrolment no") || lower.contains("enrollment no")) score += 15;
         if (lower.contains("1800 180 1947") || lower.contains("18001801947"))   score += 25;
         if (lower.contains("help@uidai.gov.in") || lower.contains("uidai.gov.in")) score += 20;
+
+        // NEW: e-Aadhaar / DigiLocker download signals
+        if (lower.contains("e-aadhaar") || lower.contains("eaadhaar"))          score += 25;
+        if (lower.contains("digilocker") && hasKw)                              score += 15;
+        if (lower.contains("resident") && hasKw)                                score += 10;
+        // NEW: Address section signals unique to Aadhaar
+        if (lower.contains("s/o") || lower.contains("d/o") || lower.contains("w/o")) {
+            if (hasKw) score += 15;
+        }
+
         if (hasKw) {
             int bio = 0;
             for (String sig : AADHAAR_BIOMETRIC_SIGNALS_LOWER)
@@ -1767,6 +1791,16 @@ public class DocumentClassificationService {
         else if (PAN_PATTERN_RELAXED.matcher(original).find()) score += 40;
         for (String sig : PAN_AUTHORITY_SIGNALS_LOWER) if (lower.contains(sig)) { score += 40; break; }
         if (lower.contains("pan application digitally signed")) score += 35;
+        // NEW: NSDL / UTIITSL are PAN-specific issuers
+        if (lower.contains("nsdl") || lower.contains("utiitsl"))               score += 30;
+        if (lower.contains("protean") && lower.contains("pan"))                score += 25;
+        // NEW: "cbdt" is the governing body for PAN
+        if (lower.contains("cbdt") || lower.contains("central board of direct taxes")) score += 30;
+        // NEW: e-PAN specific signals
+        if (lower.contains("e-pan") || lower.contains("epan"))                 score += 25;
+        if (lower.contains("section 139a") || lower.contains("income tax act")) score += 25;
+        // NEW: PAN card always has "signature" and DOB
+        if (lower.contains("signature") && lower.contains("date of birth") && PAN_PATTERN.matcher(original).find()) score += 20;
         for (String l : PAN_SPECIFIC_FIELD_LABELS)
             if (lower.contains(l) || original.contains(l)) { score += 30; break; }
         if (score > 30 && (lower.contains("govt. of india") || lower.contains("government of india"))) score += 20;
@@ -1801,6 +1835,15 @@ public class DocumentClassificationService {
         boolean dIssue = lower.contains("date of issue");
         boolean dExp   = lower.contains("date of expiry");
         if (pBirth && dIssue && dExp) score += 40; else if (pBirth && dIssue) score += 25;
+        // NEW: Passport Seva Kendra / PSK specific signals
+        if (lower.contains("passport seva") || lower.contains("passport sewa")) score += 35;
+        if (lower.contains("psk") && lower.contains("passport"))               score += 20;
+        // NEW: Passport type P (personal) or D (diplomatic) or S (service)
+        if (lower.contains("type of passport") || lower.contains("type : p"))  score += 20;
+        // NEW: ECR / ECNR (emigration check) — unique to Indian passports
+        if (lower.contains("ecr") || lower.contains("ecnr") || lower.contains("emigration check")) score += 30;
+        // NEW: File number field
+        if (lower.contains("file no") && lower.contains("passport"))           score += 20;
         return Math.min(210, score);
     }
 
@@ -1826,6 +1869,15 @@ public class DocumentClassificationService {
         if (DL_NT_FIELD.matcher(original).find())                score += 20;
         if (lower.contains("motor vehicles act"))                score += 25;
         if (lower.contains("transport authority"))               score += 20;
+        // NEW: RTO / Regional Transport Office is the issuer of all DLs
+        if (lower.contains("regional transport office") || lower.contains("rto")) score += 30;
+        if (lower.contains("regional transport authority") || lower.contains("rta")) score += 25;
+        // NEW: Blood group is printed on DL
+        if (lower.contains("blood group") && (lower.contains("licence") || lower.contains("license"))) score += 20;
+        // NEW: "Driving licence act" or "central motor vehicles rules"
+        if (lower.contains("central motor vehicles rules"))      score += 30;
+        // NEW: Pin / identification number (DL has specific layout)
+        if (lower.contains("pin") && lower.contains("doi") && lower.contains("doe")) score += 20;
         return Math.min(210, score);
     }
 
@@ -1842,7 +1894,23 @@ public class DocumentClassificationService {
         if (lower.contains("voter id") || lower.contains("voter card")) s += 40;
         if (lower.contains("matdar") || original.contains("मतदार"))    s += 30;
         if (lower.contains("booth") || lower.contains("polling"))       s += 15;
-        return Math.min(110, s);
+        // NEW: "electors photo identity card" is the full official name
+        if (lower.contains("electors photo identity card"))             s += 70;
+        if (lower.contains("photo identity card") && lower.contains("election")) s += 50;
+        // NEW: e-EPIC is the digital version
+        if (lower.contains("e-epic") || lower.contains("eepic"))        s += 50;
+        // NEW: "assembly constituency" or "parliamentary constituency" appear on EPIC
+        if (lower.contains("assembly constituency"))                     s += 30;
+        if (lower.contains("parliamentary constituency"))                s += 25;
+        // NEW: Part no. / serial no. appear on EPIC
+        if (lower.contains("part no") && (lower.contains("epic") || lower.contains("voter"))) s += 20;
+        // NEW: "registered at" polling station
+        if (lower.contains("polling station") || lower.contains("polling booth")) s += 20;
+        // NEW: Hindi/Marathi signals
+        if (original.contains("निर्वाचक फोटो पहचान पत्र"))            s += 65;
+        if (original.contains("मतदार ओळखपत्र"))                        s += 65;
+        if (original.contains("भारत निर्वाचन आयोग"))                   s += 45;
+        return Math.min(140, s);
     }
 
     private int scoreIncomeCertificate(String lower, String original) {
@@ -1863,37 +1931,91 @@ public class DocumentClassificationService {
         if (original.contains("मुद्रांक") || original.contains("शुल्क")) s += 15;
         if (original.contains("वैध राहील") && original.contains("उत्पन्न")) s += 30;
         if (lower.contains("below poverty line") || original.contains("दारिद्र्यरेषा")) s += 20;
-        // FIX-R4: "N वर्षांसाठी उत्पन्नाचे प्रमाणपत्र" title pattern
-        if (original.contains("वैच राहील") && original.contains("उत्पन्न")) s += 30; // FIX-A: वैच variant
+        if (original.contains("वैच राहील") && original.contains("उत्पन्न")) s += 30;
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्नाचे")) s += 20;
         if (original.contains("वर्षांसाठी") && original.contains("उत्पन्न"))    s += 15;
+        // NEW: "gross annual family income" — classic phrase on Tahsildar-issued income certs
+        if (lower.contains("gross annual family income"))   s += 55;
+        if (lower.contains("gross annual income"))          s += 45;
+        if (lower.contains("family income"))                s += 30;
+        // NEW: "economically weaker section" or "EWS" — income cert for reservations
+        if (lower.contains("economically weaker section") || lower.contains("ews")) s += 35;
+        // NEW: Sub-divisional officer (SDO) also issues income certs
+        if (lower.contains("sub-divisional officer") || lower.contains("sdo")) {
+            if (lower.contains("income") || original.contains("उत्पन्न")) s += 25;
+        }
+        // NEW: "income for the year" — standard English phrasing on income cert body
+        if (lower.contains("income for the year") || lower.contains("income of rs.")) s += 35;
+        // NEW: MahaOnline OMTID footer (already present but add more signals)
+        if (lower.contains("omtid") || lower.contains("mahaonline"))       s += 20;
+        // NEW: "certified that" + income context
+        if (lower.contains("certified that") && (lower.contains("income") || original.contains("उत्पन्न"))) s += 20;
+        // NEW: Hindi income cert signals
+        if (original.contains("आय प्रमाण पत्र"))           s += 80;
+        if (original.contains("वार्षिक आय"))                s += 40;
+        if (original.contains("कुल वार्षिक आय"))            s += 45;
         return Math.min(130, s);
     }
 
     private int scoreDomicileCertificate(String lower, String original) {
         int s = 0;
-        if (lower.contains("domicile certificate"))                              s += 80;
-        if (DOMICILE_CERTIFY_PHRASE.matcher(lower).find())                       s += 70;
-        else if (lower.contains("permanent resident of") || lower.contains("permanently residing")) s += 40;
-        if (DOMICILE_COLLECTOR_OFFICE.matcher(lower).find())                     s += 55;
-        if (DOMICILE_COLLECTOR_SEAL.matcher(original).find())                    s += 45;
-        if (DOMICILE_FILE_NO.matcher(original).find())                           s += 35;
+
+        // HIGH-VALUE: Maharashtra "Certificate of Age, Nationality and Domicile"
+        if (lower.contains("certificate of age, nationality and domicile"))       s += 100;
+        if (lower.contains("age, nationality and domicile"))                       s += 90;
+        if (lower.contains("nationality and domicile"))                            s += 75;
+        if (lower.contains("domiciled in the state of"))                           s += 70;
+        if (lower.contains("citizen of india") && lower.contains("domicile"))      s += 65;
+        if (lower.contains("office of collector") ||
+                lower.contains("collector & district magistrate") ||
+                lower.contains("collector and district magistrate"))                   s += 55;
+        if (lower.contains("tahsildar") || lower.contains("tahasil"))              s += 20;
+
+        if (lower.contains("domicile certificate"))                                s += 80;
+        if (DOMICILE_CERTIFY_PHRASE.matcher(lower).find())                         s += 70;
+        else if (lower.contains("permanent resident of") ||
+                lower.contains("permanently residing"))                           s += 40;
+        if (DOMICILE_COLLECTOR_OFFICE.matcher(lower).find())                       s += 55;
+        if (DOMICILE_COLLECTOR_SEAL.matcher(original).find())                      s += 45;
+        if (DOMICILE_FILE_NO.matcher(original).find())                             s += 35;
+
         // Marathi domicile signals
         if (original.contains("अधिवास प्रमाणपत्र") || original.contains("रहिवासी प्रमाणपत्र")) s += 65;
         if (original.contains("मूल निवासी प्रमाण पत्र") || original.contains("निवास प्रमाण पत्र")) s += 60;
         if (original.contains("रहिवास दाखला") || original.contains("रहिवास प्रमाणपत्र"))       s += 65;
-        if (original.contains("अधिवास दाखला"))                                  s += 65;
-        if (original.contains("वास्तव्य") && (original.contains("प्रमाणपत्र") || original.contains("दाखला"))) s += 55;
-        if (original.contains("कायमचा रहिवासी") || original.contains("कायमस्वरूपी रहिवासी"))   s += 60;
-        if (original.contains("राज्याचा रहिवासी") || original.contains("महाराष्ट्राचा रहिवासी")) s += 55;
+        if (original.contains("अधिवास दाखला"))                                    s += 65;
+        if (original.contains("वास्तव्य") &&
+                (original.contains("प्रमाणपत्र") || original.contains("दाखला")))      s += 55;
+        if (original.contains("कायमचा रहिवासी") ||
+                original.contains("कायमस्वरूपी रहिवासी"))                             s += 60;
+        if (original.contains("राज्याचा रहिवासी") ||
+                original.contains("महाराष्ट्राचा रहिवासी"))                           s += 55;
+
         // Hindi domicile signals
-        if (original.contains("निवास प्रमाण पत्र") || original.contains("मूल निवास प्रमाण पत्र")) s += 60;
-        if (original.contains("स्थायी निवासी") || original.contains("स्थायी रूप से निवास"))    s += 55;
-        if (lower.contains("domicile") && !lower.contains("domicile certificate"))              s += 30;
-        if (lower.contains("premises no"))                                       s += 25;
-        if (DOMICILE_IAS_TAG.matcher(original).find())                           s += 20;
-        if (lower.contains("resident of state") || lower.contains("resident of the state"))     s += 20;
-        return Math.min(160, s);
+        if (original.contains("निवास प्रमाण पत्र") ||
+                original.contains("मूल निवास प्रमाण पत्र"))                           s += 60;
+        if (original.contains("स्थायी निवासी") ||
+                original.contains("स्थायी रूप से निवास"))                             s += 55;
+        if (lower.contains("domicile") && !lower.contains("domicile certificate")) s += 30;
+        if (lower.contains("premises no"))                                         s += 25;
+        if (DOMICILE_IAS_TAG.matcher(original).find())                             s += 20;
+        if (lower.contains("resident of state") ||
+                lower.contains("resident of the state"))                               s += 20;
+
+        // NEW: "particulars of proofs submitted" — phrase from the Maharashtra domicile cert
+        if (lower.contains("particulars of proofs submitted") ||
+                lower.contains("particulars of proofs"))                               s += 40;
+        // NEW: "issued by authorities in the state of maharashtra" — subtitle on the cert
+        if (lower.contains("issued by authorities in the state"))                  s += 35;
+        // NEW: "territory of india" — in the body "within the territory of INDIA"
+        if (lower.contains("territory of india") && lower.contains("domicile"))    s += 35;
+        // NEW: "district magistrate" is co-issuer with Collector on domicile certs
+        if (lower.contains("district magistrate") && lower.contains("domicile"))   s += 40;
+        // NEW: VJ/NT/SBC/DT categories unique to Maharashtra domicile/caste certs
+        if ((lower.contains("vj") || lower.contains("nt") || lower.contains("sbc")) &&
+                lower.contains("maharashtra"))                                          s += 20;
+
+        return Math.min(200, s);
     }
 
     private int scoreCasteCertificate(String lower, String original) {
@@ -1913,25 +2035,83 @@ public class DocumentClassificationService {
         if (s > 30 && CASTE_SALUTATION.matcher(original).find())                s += 20;
         if (original.contains("आरक्षण"))                                        s += 25;
         if (lower.contains("sc/st") || lower.contains("obc certificate"))       s += 40;
+        // NEW: "caste validity certificate" — Maharashtra-specific post-2012 requirement
+        if (lower.contains("caste validity certificate") || lower.contains("caste validity")) s += 70;
+        if (original.contains("जात वैधता प्रमाणपत्र") || original.contains("जात पडताळणी")) s += 70;
+        // NEW: Maharashtra categories VJ/NT/SBC/DT
+        if (lower.contains("vimukta jati") || lower.contains("nomadic tribes"))  s += 50;
+        if (lower.contains("special backward class") || lower.contains("sbc"))   s += 40;
+        if (lower.contains("denotified tribes") || lower.contains("dt") && lower.contains("caste")) s += 35;
+        // NEW: "belongs to" — standard phrase in caste cert body
+        if (lower.contains("belongs to the") && (lower.contains("caste") || lower.contains("tribe"))) s += 30;
+        // NEW: OBC non-creamy layer certificate
+        if (lower.contains("non-creamy layer") || lower.contains("non creamy layer")) s += 55;
+        if (lower.contains("creamy layer"))                                       s += 40;
+        // NEW: "social justice department" issues caste certs
+        if (lower.contains("social justice") && lower.contains("caste"))         s += 30;
+        // NEW: "backward class welfare" dept
+        if (lower.contains("backward class welfare"))                             s += 35;
+        // NEW: Marathi OBC signals
+        if (original.contains("इतर मागासवर्ग") || original.contains("ओबीसी"))   s += 55;
+        if (original.contains("विमुक्त जाती") || original.contains("भटक्या जमाती")) s += 55;
         return Math.min(210, s);
     }
 
     private int scoreRationCard(String lower, String original) {
         int s = 0;
+
+        // GUARD: "Ration Card" mentioned as proof submitted in a govt certificate
+        boolean rationMentionedAsProof =
+                lower.contains("particulars of proofs") ||
+                        lower.contains("proofs submitted") ||
+                        lower.contains("list of documents") ||
+                        lower.contains("documents submitted") ||
+                        (lower.contains("ration card") &&
+                                (lower.contains("birth certificate") ||
+                                        lower.contains("school leaving")    ||
+                                        lower.contains("collector")         ||
+                                        lower.contains("district magistrate") ||
+                                        lower.contains("tahsildar")         ||
+                                        lower.contains("domicile")          ||
+                                        lower.contains("nationality")));
+
+        if (rationMentionedAsProof) return 0;
+
         if (lower.contains("ration card"))                                        s += 55;
         if (original.contains("राशन कार्ड") || original.contains("शिधापत्रिका")) s += 50;
         if (lower.contains("public distribution system"))                          s += 35;
         if (lower.contains("food") && lower.contains("civil supplies"))           s += 25;
         if (lower.contains("fair price shop") || lower.contains("fpds"))          s += 30;
         if (original.contains("अन्न पुरवठा") || original.contains("स्वस्त धान्य")) s += 35;
-        // BUG-FIX: "bpl"/"apl" alone fires on domicile certs, income certs mentioning poverty line.
-        // Require "ration" context or another PDS signal alongside.
+
         boolean hasRationCtx = lower.contains("ration") || lower.contains("शिधा")
                 || lower.contains("fair price") || lower.contains("pds");
         if (hasRationCtx && (lower.contains("bpl") || lower.contains("apl") || lower.contains("antyodaya"))) s += 25;
-        // antyodaya is ration-specific enough to score alone
         if (lower.contains("antyodaya anna yojana"))                              s += 35;
         if (original.contains("प्रधानमंत्री गरीब") && original.contains("अन्न"))  s += 30;
+
+        // NEW: NFSA (National Food Security Act) is THE ration card act
+        if (lower.contains("national food security act") || lower.contains("nfsa")) s += 45;
+        // NEW: "head of family" or "head of household" — key field on ration card
+        if (lower.contains("head of family") || lower.contains("head of household")) {
+            if (hasRationCtx) s += 35;
+        }
+        // NEW: "priority household" or "phh" — NFSA ration card type
+        if (lower.contains("priority household") || lower.contains("phh"))        s += 35;
+        // NEW: "food grain" or "foodgrain" — content of ration card entitlement
+        if (lower.contains("food grain") || lower.contains("foodgrain"))          s += 25;
+        // NEW: "ration shop" or "depot" — where beneficiary collects
+        if (lower.contains("ration shop") || lower.contains("depot no"))          s += 30;
+        // NEW: Quota / allocation fields
+        if (lower.contains("monthly quota") || lower.contains("unit quota"))      s += 30;
+        if (lower.contains("rice") && lower.contains("wheat") && hasRationCtx)   s += 25;
+        // NEW: "taluk supply officer" or "district supply officer"
+        if (lower.contains("supply officer") || lower.contains("civil supplies officer")) s += 30;
+        // NEW: "one nation one ration card" — portability scheme
+        if (lower.contains("one nation one ration") || lower.contains("onorc"))   s += 40;
+        // NEW: "shidha" (Marathi for ration/grain supplies)
+        if (original.contains("शिधा वाटप") || original.contains("रेशन दुकान"))   s += 45;
+
         return Math.min(110, s);
     }
 
@@ -1943,7 +2123,36 @@ public class DocumentClassificationService {
         if (lower.contains("date of birth") && lower.contains("place of birth")) s += 25;
         if (lower.contains("registrar of birth"))     s += 30;
         if (original.contains("जन्म नोंदणी"))        s += 30;
-        return Math.min(110, s);
+        // NEW: Registration of Births & Deaths Act 1969 — THE governing legislation
+        if (lower.contains("registration of births and deaths act") ||
+                lower.contains("registration of births & deaths"))                    s += 50;
+        if (lower.contains("births and deaths act"))                              s += 40;
+        // NEW: "registrar of births and deaths" — exact title of issuing officer
+        if (lower.contains("registrar of births and deaths"))                     s += 50;
+        if (lower.contains("chief registrar of births"))                          s += 45;
+        // NEW: CRS — Civil Registration System (national portal)
+        if (lower.contains("civil registration system") || lower.contains("crsorgi")) s += 35;
+        // NEW: "section 12" or "section 17" of RBD Act appear on birth cert header
+        if (lower.contains("section 12") && lower.contains("section 17"))        s += 30;
+        // NEW: Municipal Corporation / Gram Panchayat are the issuing bodies
+        if (lower.contains("municipal corporation") && lower.contains("birth"))   s += 30;
+        if (lower.contains("gram panchayat") && lower.contains("birth"))          s += 25;
+        // NEW: "name of child" and "name of father/mother" — standard birth cert fields
+        if (lower.contains("name of child"))                                      s += 25;
+        if (lower.contains("name of father") || lower.contains("name of mother")) {
+            if (lower.contains("birth")) s += 20;
+        }
+        // NEW: "hospital / nursing home" — where birth occurred
+        if (lower.contains("name of hospital") || lower.contains("place of birth")) {
+            if (lower.contains("birth certificate") || lower.contains("जन्म")) s += 20;
+        }
+        // NEW: Marathi birth cert signals
+        if (original.contains("जन्म नोंदणी प्रमाणपत्र"))                         s += 60;
+        if (original.contains("महानगरपालिका") && original.contains("जन्म"))       s += 30;
+        // NEW: Hindi birth cert
+        if (original.contains("जन्म प्रमाण पत्र"))                                s += 55;
+        if (original.contains("जन्म एवं मृत्यु पंजीकरण"))                         s += 45;
+        return Math.min(130, s);
     }
 
     private int scoreMarriageCertificate(String lower, String original) {
@@ -1953,7 +2162,27 @@ public class DocumentClassificationService {
         if (lower.contains("registration of marriage"))  s += 35;
         if (lower.contains("hindu marriage act") || lower.contains("special marriage act")) s += 40;
         if (original.contains("विवाह नोंदणी") || original.contains("विवाह संस्कार")) s += 30;
-        return Math.min(110, s);
+        // NEW: "husband's name" and "wife's name" — standard marriage cert fields
+        if (lower.contains("husband's name") || lower.contains("wife's name"))    s += 30;
+        if (lower.contains("bridegroom") || lower.contains("bride"))              s += 25;
+        // NEW: Date of marriage is a key field
+        if (lower.contains("date of marriage"))                                   s += 35;
+        if (lower.contains("place of marriage"))                                  s += 25;
+        // NEW: "registrar of marriages" — issuing authority
+        if (lower.contains("registrar of marriages") || lower.contains("marriage registrar")) s += 40;
+        // NEW: "marriage registration act" or specific state acts
+        if (lower.contains("marriage act") || lower.contains("marriages act"))    s += 25;
+        // NEW: Marathi marriage signals
+        if (original.contains("विवाह नोंदणी प्रमाणपत्र"))                        s += 60;
+        if (original.contains("नवरा") || original.contains("बायको"))              s += 20;
+        if (original.contains("महानगरपालिका") && original.contains("विवाह"))      s += 25;
+        // NEW: "witnesses" — marriage certs have witness fields
+        if (lower.contains("witness") && lower.contains("marriage"))              s += 20;
+        // NEW: "solemnized" — legal word for performed marriage
+        if (lower.contains("solemnized"))                                         s += 30;
+        // NEW: Hindi marriage cert signals
+        if (original.contains("विवाह प्रमाण पत्र") || original.contains("विवाह पंजीयन")) s += 55;
+        return Math.min(130, s);
     }
 
     private int scoreEducation(String lower, String original) {
@@ -1979,7 +2208,30 @@ public class DocumentClassificationService {
         if (original.contains("विद्यापीठ"))                                     s += 25;
         if (lower.contains("cbse") || lower.contains("icse") || lower.contains("nios")) s += 40;
         if (lower.contains("provisional certificate") || lower.contains("migration certificate")) s += 30;
-        return Math.min(110, s);
+        // NEW: School leaving certificate — very common document type
+        if (lower.contains("school leaving certificate") || lower.contains("leaving certificate")) s += 55;
+        if (lower.contains("transfer certificate") || lower.contains("t.c."))   s += 45;
+        // NEW: "hall ticket" or "admit card" — exam-related edu documents
+        if (lower.contains("hall ticket") || lower.contains("admit card"))       s += 40;
+        // NEW: "roll number" — appears on marksheets
+        if (lower.contains("roll no") || lower.contains("roll number"))          s += 20;
+        // NEW: "seat number" — Maharashtra board uses seat number
+        if (lower.contains("seat no") || lower.contains("seat number"))          s += 20;
+        // NEW: Maharashtra board signals
+        if (lower.contains("maharashtra state board") || lower.contains("msbshse")) s += 50;
+        if (lower.contains("pune board") || lower.contains("nagpur board") || lower.contains("aurangabad board")) s += 35;
+        // NEW: "pass" or "fail" — result outcome on marksheets
+        if ((lower.contains(" pass") || lower.contains("passed")) &&
+                (lower.contains("examination") || lower.contains("exam")))           s += 20;
+        // NEW: "subject" and "max marks" and "marks obtained" combo
+        if (lower.contains("max. marks") || lower.contains("maximum marks"))     s += 20;
+        // NEW: "bonafide certificate" from school/college
+        if (lower.contains("bonafide certificate") || lower.contains("bona fide certificate")) s += 40;
+        // NEW: UGC / AICTE signal university degrees
+        if (lower.contains("ugc") || lower.contains("aicte") || lower.contains("approved by")) {
+            if (lower.contains("university") || lower.contains("college")) s += 20;
+        }
+        return Math.min(130, s);
     }
 
     private int scoreMedical(String lower, String original) {
@@ -1989,8 +2241,6 @@ public class DocumentClassificationService {
         if (lower.contains("pathology") || lower.contains("laboratory report"))   s += 40;
         if (lower.contains("diagnosis") || lower.contains("radiology"))           s += 28;
         if (lower.contains("patient name"))               s += 22;
-        // BUG-FIX: "dr." alone fires on government certs where the signing officer has a doctorate.
-        // "hospital"/"clinic" alone fires on address lines. Require medical context alongside.
         boolean hasMedCtx = lower.contains("patient") || lower.contains("diagnosis")
                 || lower.contains("prescription") || lower.contains("treatment")
                 || lower.contains("hospital") || lower.contains("clinic")
@@ -1999,7 +2249,23 @@ public class DocumentClassificationService {
         if (original.contains("वैद्यकीय") || original.contains("रुग्णालय"))      s += 30;
         if (hasMedCtx && (lower.contains("hospital") || lower.contains("clinic"))) s += 15;
         if (lower.contains("blood group") || lower.contains("x-ray") || lower.contains("mri")) s += 20;
-        return Math.min(110, s);
+        // NEW: "discharge summary" — hospital document
+        if (lower.contains("discharge summary") || lower.contains("discharge certificate")) s += 50;
+        // NEW: "investigation" — pathology reports use this
+        if (lower.contains("investigation") && hasMedCtx)  s += 20;
+        // NEW: "medicine" or "drug" — prescription documents
+        if ((lower.contains("medicine") || lower.contains("drug") || lower.contains("tablet")) &&
+                hasMedCtx)                                      s += 20;
+        // NEW: "fitness certificate" — for employment/DL
+        if (lower.contains("fitness certificate") || lower.contains("medical fitness")) s += 45;
+        // NEW: "disability certificate" — govt-issued for disabled persons
+        if (lower.contains("disability certificate") || lower.contains("handicap certificate")) s += 50;
+        if (lower.contains("percentage of disability"))     s += 45;
+        // NEW: "blood test" / "urine test" — pathology
+        if (lower.contains("blood test") || lower.contains("urine test") || lower.contains("haemoglobin")) s += 30;
+        // NEW: "ct scan" / "sonography" / "ultrasound"
+        if (lower.contains("ct scan") || lower.contains("sonography") || lower.contains("ultrasound")) s += 30;
+        return Math.min(130, s);
     }
 
     private int scoreProperty(String lower, String original) {
@@ -2010,14 +2276,32 @@ public class DocumentClassificationService {
         if (lower.contains("eight-a") || lower.contains("8-a"))                  s += 45;
         if (lower.contains("survey number"))                                      s += 28;
         if (original.contains("सातबारा") || original.contains("७/१२"))          s += 40;
-        // BUG-FIX: "खाते" (meaning account/record) is present on many govt letterheads.
-        // Only score it when paired with property-specific terms.
         if (original.contains("खाते") && (original.contains("सातबारा") || original.contains("७/१२")
                 || lower.contains("survey") || lower.contains("land record")))   s += 30;
         if (lower.contains("khata") || lower.contains("khatha"))                 s += 30;
         if (lower.contains("mutation") || lower.contains("fard"))                s += 25;
-        return Math.min(110, s);
+        // NEW: "sale agreement" / "purchase agreement" / "agreement for sale"
+        if (lower.contains("agreement for sale") || lower.contains("sale agreement")) s += 50;
+        if (lower.contains("gift deed") || lower.contains("gift of property"))   s += 45;
+        if (lower.contains("lease deed") || lower.contains("rental agreement"))  s += 40;
+        // NEW: "sub-registrar" is the authority for property documents
+        if (lower.contains("sub-registrar") || lower.contains("sub registrar"))  s += 40;
+        if (lower.contains("registration fee") && lower.contains("property"))    s += 25;
+        // NEW: "stamp duty" — unique to property documents
+        if (lower.contains("stamp duty"))                                         s += 35;
+        // NEW: "plot no" / "flat no" / "house no" in property context
+        if (lower.contains("plot no") && (lower.contains("deed") || lower.contains("property"))) s += 20;
+        // NEW: "CTS number" / "gut number" — Maharashtra property identifiers
+        if (lower.contains("cts no") || lower.contains("cts number") || lower.contains("gut no")) s += 30;
+        // NEW: Marathi property signals
+        if (original.contains("खरेदीखत") || original.contains("विक्रीखत"))       s += 55;
+        if (original.contains("नोंदणी") && original.contains("मिळकत"))           s += 40;
+        if (original.contains("दस्त क्रमांक"))                                    s += 35;
+        // NEW: "power of attorney" — property transfer document
+        if (lower.contains("power of attorney") || lower.contains("poa"))        s += 40;
+        return Math.min(130, s);
     }
+
 
     private int scoreInsurance(String lower, String original) {
         int s = 0;
@@ -2027,7 +2311,28 @@ public class DocumentClassificationService {
         if (lower.contains("sum assured") || lower.contains("sum insured")) s += 28;
         if (lower.contains("nominee"))            s += 20;
         if (lower.contains("lic") || lower.contains("life insurance")) s += 25;
-        return Math.min(110, s);
+        // NEW: Specific insurance company names common in India
+        if (lower.contains("national insurance") || lower.contains("new india assurance")) s += 35;
+        if (lower.contains("united india insurance") || lower.contains("oriental insurance")) s += 35;
+        if (lower.contains("bajaj allianz") || lower.contains("hdfc ergo") || lower.contains("icici lombard")) s += 30;
+        // NEW: "policyholder" — key term in all insurance docs
+        if (lower.contains("policyholder") || lower.contains("policy holder")) s += 30;
+        // NEW: "insured" — standard term
+        if (lower.contains("insured") && lower.contains("policy"))            s += 25;
+        // NEW: "maturity date" / "commencement date" — policy dates
+        if (lower.contains("commencement date") || lower.contains("maturity date")) s += 30;
+        if (lower.contains("inception date") || lower.contains("risk commencement")) s += 25;
+        // NEW: "irda" / "irdai" — regulatory body for all insurance in India
+        if (lower.contains("irda") || lower.contains("irdai"))                s += 30;
+        // NEW: Health insurance signals
+        if (lower.contains("health insurance") || lower.contains("mediclaim")) s += 45;
+        if (lower.contains("cashless") || lower.contains("reimbursement"))    s += 30;
+        // NEW: Motor insurance signals
+        if (lower.contains("motor insurance") || lower.contains("vehicle insurance")) s += 40;
+        if (lower.contains("third party") && lower.contains("insurance"))     s += 35;
+        // NEW: "endorsement" — modification to an insurance policy
+        if (lower.contains("endorsement") && lower.contains("policy"))        s += 25;
+        return Math.min(130, s);
     }
 
     private int scoreFinancial(String lower, String original) {
@@ -2037,12 +2342,30 @@ public class DocumentClassificationService {
         if (lower.contains("transaction history") || lower.contains("passbook")) s += 28;
         if (lower.contains("debit") && lower.contains("credit"))                 s += 20;
         if (lower.contains("cheque") || lower.contains("neft") || lower.contains("rtgs")) s += 20;
-        // BUG-FIX: "account number" and "ifsc" appear on govt certificates that require
-        // bank account details for DBT. Require bank-statement context alongside.
         boolean hasBankCtx = lower.contains("statement") || lower.contains("transaction")
                 || lower.contains("passbook") || lower.contains("debit") || lower.contains("credit");
         if (hasBankCtx && (lower.contains("ifsc") || lower.contains("account number"))) s += 35;
-        return Math.min(110, s);
+        // NEW: "income tax return" / "ITR" — financial document
+        if (lower.contains("income tax return") || lower.contains("itr"))        s += 50;
+        if (lower.contains("form 16") || lower.contains("form-16"))              s += 50;
+        if (lower.contains("form 26as"))                                         s += 45;
+        // NEW: "balance sheet" / "profit and loss" — business financial docs
+        if (lower.contains("balance sheet") || lower.contains("profit and loss")) s += 45;
+        if (lower.contains("profit & loss") || lower.contains("p&l"))            s += 40;
+        // NEW: "chartered accountant" — financial docs are often CA-certified
+        if (lower.contains("chartered accountant") || lower.contains("c.a."))    s += 25;
+        // NEW: "tds certificate" / "form 16a" — tax deduction at source
+        if (lower.contains("tds certificate") || lower.contains("form 16a"))     s += 45;
+        // NEW: Bank-specific statements
+        if (lower.contains("opening balance") || lower.contains("closing balance")) {
+            if (hasBankCtx) s += 30;
+        }
+        // NEW: "mutual fund" / "stock" / "shares" — investment documents
+        if (lower.contains("mutual fund") || lower.contains("demat statement"))  s += 40;
+        if (lower.contains("capital gains") || lower.contains("dividend"))       s += 30;
+        // NEW: "salary certificate" with income context (not pure payslip)
+        if (lower.contains("salary certificate") && lower.contains("income"))    s += 35;
+        return Math.min(130, s);
     }
 
     private int scoreBills(String lower, String original) {
@@ -2050,8 +2373,6 @@ public class DocumentClassificationService {
         if (lower.contains("fee receipt") || lower.contains("fees receipt"))     s += 60;
         if (lower.contains("tuition fee") || lower.contains("college fee") || lower.contains("school fee")) s += 50;
         if (lower.contains("tax invoice") || lower.contains("invoice"))          s += 45;
-        // BUG-FIX: "bill" and "receipt" alone fire on too many unrelated docs (domicile stamp fee,
-        // court fee receipts, etc.). Require at least one financial context signal alongside them.
         boolean hasBill    = lower.contains("bill");
         boolean hasReceipt = lower.contains("receipt");
         boolean hasFinCtx  = lower.contains("payment") || lower.contains("paid") || lower.contains("amount")
@@ -2065,7 +2386,24 @@ public class DocumentClassificationService {
         if (lower.contains("ticket") || lower.contains("fare"))                  s += 30;
         if (lower.contains("electricity bill") || lower.contains("water bill"))  s += 40;
         if (lower.contains("utility bill"))                                       s += 35;
-        return Math.min(110, s);
+        // NEW: MSEDCL (Maharashtra State Electricity Distribution Co) — electricity bill issuer
+        if (lower.contains("msedcl") || lower.contains("mseb"))                  s += 50;
+        if (lower.contains("mahavitaran") || original.contains("महावितरण"))      s += 50;
+        // NEW: "consumer no" / "meter no" — electricity/water bill fields
+        if (lower.contains("consumer no") || lower.contains("consumer number"))  s += 30;
+        if (lower.contains("meter no") || lower.contains("meter number"))        s += 30;
+        // NEW: "bill date" / "due date" / "bill period" — utility bill fields
+        if (lower.contains("bill date") && (lower.contains("amount") || lower.contains("units"))) s += 30;
+        if (lower.contains("due date") && lower.contains("bill"))                s += 20;
+        // NEW: "units consumed" — electricity bill
+        if (lower.contains("units consumed") || lower.contains("units of electricity")) s += 40;
+        // NEW: Mobile / broadband bills
+        if ((lower.contains("jio") || lower.contains("airtel") || lower.contains("bsnl") ||
+                lower.contains("vodafone") || lower.contains("vi ")) &&
+                (lower.contains("bill") || lower.contains("invoice")))               s += 45;
+        // NEW: "challan" — government payment receipt
+        if (lower.contains("challan"))                                            s += 35;
+        return Math.min(130, s);
     }
 
     private int scoreEmployment(String lower, String original) {
@@ -2086,8 +2424,25 @@ public class DocumentClassificationService {
         if (lower.contains("designation") && lower.contains("department"))      s += 30;
         if (original.contains("रोजगार") || original.contains("नोकरी") || original.contains("पगार")) s += 25;
         if (isIncomeCertificateText(lower, original)) s -= 30;
-        return Math.max(0, Math.min(110, s));
+        // NEW: "pay slip" / "pay stub" — common payslip terminology
+        if (lower.contains("pay slip") || lower.contains("pay stub"))           s += 50;
+        if (lower.contains("basic pay") || lower.contains("basic salary"))      s += 30;
+        if (lower.contains("gross salary") || lower.contains("net salary"))     s += 30;
+        if (lower.contains("provident fund") || lower.contains("pf no") ||
+                lower.contains("epf") || lower.contains("employee's provident fund")) s += 35;
+        // NEW: "esic" / "employee state insurance" — govt employment doc
+        if (lower.contains("esic") || lower.contains("employee state insurance")) s += 35;
+        // NEW: "in service" / "currently employed" / "period of service" — experience cert
+        if (lower.contains("period of service") || lower.contains("date of joining")) s += 30;
+        if (lower.contains("in service") || lower.contains("currently employed")) s += 25;
+        // NEW: "no objection certificate" (NOC) from employer
+        if (lower.contains("no objection certificate") && lower.contains("employ")) s += 40;
+        // NEW: Government employment signals
+        if (lower.contains("government servant") || lower.contains("gazetted officer")) s += 35;
+        if (lower.contains("service book") || lower.contains("service record"))  s += 40;
+        return Math.max(0, Math.min(130, s));
     }
+
 
     private int scoreVehicle(String lower, String original) {
         int s = 0;
@@ -2096,7 +2451,29 @@ public class DocumentClassificationService {
         if (lower.contains("pollution under control") || lower.contains("puc")) s += 45;
         if (lower.contains("chassis number") || lower.contains("engine number")) s += 30;
         if (lower.contains("vehicle class") || lower.contains("fuel type"))     s += 20;
-        return Math.min(110, s);
+        // NEW: "smart card" RC — new format of vehicle registration cert
+        if (lower.contains("smart card") && lower.contains("registration"))      s += 40;
+        // NEW: "fitness certificate" for commercial vehicles
+        if (lower.contains("fitness certificate") && (lower.contains("vehicle") || lower.contains("commercial"))) s += 40;
+        // NEW: Specific vehicle type identifiers
+        if (lower.contains("two-wheeler") || lower.contains("four-wheeler") || lower.contains("heavy vehicle")) s += 20;
+        if (lower.contains("lmv") || lower.contains("mcwg") || lower.contains("hgv")) {
+            if (!lower.contains("driving licence")) s += 20; // avoid DL confusion
+        }
+        // NEW: "owner's name" — RC fields
+        if (lower.contains("owner's name") || lower.contains("owner name"))      s += 25;
+        if (lower.contains("registered owner"))                                  s += 30;
+        // NEW: "make" and "model" — vehicle fields
+        if (lower.contains("make") && lower.contains("model") &&
+                (lower.contains("vehicle") || lower.contains("registration")))       s += 20;
+        // NEW: "hypothecation" — vehicle loan; appears on RC
+        if (lower.contains("hypothecation"))                                     s += 35;
+        // NEW: "road tax" / "tax paid upto" — vehicle tax
+        if (lower.contains("road tax") || lower.contains("motor vehicle tax"))   s += 30;
+        // NEW: Marathi RC signals
+        if (original.contains("वाहन नोंदणी") || original.contains("वाहन परवाना")) s += 40;
+        if (original.contains("प्रदूषण नियंत्रण"))                               s += 40;
+        return Math.min(130, s);
     }
 
     private int scoreLegal(String lower, String original) {
@@ -2108,7 +2485,25 @@ public class DocumentClassificationService {
         if (original.contains("शपथपत्र") || original.contains("प्रतिज्ञापत्र")) s += 40;
         if (lower.contains("high court") || lower.contains("supreme court")) s += 35;
         if (lower.contains("first information report") || lower.contains("fir")) s += 40;
-        return Math.min(110, s);
+        // NEW: "sworn before" / "deponent" — affidavit-specific terms
+        if (lower.contains("sworn before") || lower.contains("deponent"))        s += 35;
+        if (lower.contains("solemnly affirm") || lower.contains("solemnly declare")) s += 40;
+        // NEW: "magistrate" / "notary public" — who authenticates legal docs
+        if (lower.contains("notary public") || lower.contains("notary"))         s += 40;
+        if (lower.contains("executive magistrate") || lower.contains("judicial magistrate")) s += 35;
+        // NEW: "power of attorney" — legal document (NOT property deed)
+        if (lower.contains("power of attorney") && !lower.contains("sale deed")) s += 45;
+        // NEW: "writ petition" / "civil suit" — court documents
+        if (lower.contains("writ petition") || lower.contains("civil suit"))     s += 45;
+        if (lower.contains("petition") && lower.contains("court"))               s += 30;
+        // NEW: "deed poll" / "name change" — legal name change documents
+        if (lower.contains("deed poll") || lower.contains("change of name"))     s += 40;
+        // NEW: "advocate" / "lawyer" — legal professional
+        if (lower.contains("advocate") || lower.contains("attorney"))            s += 20;
+        // NEW: Marathi legal signals
+        if (original.contains("प्रतिज्ञापत्र") || original.contains("न्यायालय")) s += 35;
+        if (original.contains("दावा") && original.contains("न्यायालय"))          s += 30;
+        return Math.min(130, s);
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -2320,5 +2715,6 @@ public class DocumentClassificationService {
         // ds is always "31/03/YYYY"
         return LocalDate.parse(ds, DateTimeFormatter.ofPattern("dd/MM/yyyy"));
     }
+
 
 }

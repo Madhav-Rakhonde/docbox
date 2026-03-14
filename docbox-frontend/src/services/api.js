@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { toast } from 'react-toastify';
 
-const API_URL = 'https://docbox-backend.onrender.com/api';
+const API_URL = 'http://localhost:8080/api';
 
 /**
  * CENTRALIZED API ENDPOINTS

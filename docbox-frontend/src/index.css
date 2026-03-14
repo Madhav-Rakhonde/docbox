@@ -2,57 +2,57 @@
 
 :root {
   /* Color System */
-  --color-bg: #F8F9FC;
-  --color-surface: #FFFFFF;
-  --color-surface-2: #F1F3F9;
-  --color-border: #E2E8F0;
-  --color-border-strong: #CBD5E1;
+  --color-bg:               #F8F9FC;
+  --color-surface:          #FFFFFF;
+  --color-surface-2:        #F1F3F9;
+  --color-border:           #E2E8F0;
+  --color-border-strong:    #CBD5E1;
 
-  --color-text-primary: #0F172A;
-  --color-text-secondary: #475569;
-  --color-text-muted: #94A3B8;
+  --color-text-primary:     #0F172A;
+  --color-text-secondary:   #475569;
+  --color-text-muted:       #94A3B8;
 
-  --color-accent: #6366F1;
-  --color-accent-light: #EEF2FF;
-  --color-accent-dark: #4F46E5;
-  --color-accent-glow: rgba(99, 102, 241, 0.15);
+  --color-accent:           #6366F1;
+  --color-accent-light:     #EEF2FF;
+  --color-accent-dark:      #4F46E5;
+  --color-accent-glow:      rgba(99, 102, 241, 0.15);
 
-  --color-success: #10B981;
-  --color-success-light: #ECFDF5;
-  --color-warning: #F59E0B;
-  --color-warning-light: #FFFBEB;
-  --color-error: #EF4444;
-  --color-error-light: #FEF2F2;
-  --color-info: #3B82F6;
-  --color-info-light: #EFF6FF;
+  --color-success:          #10B981;
+  --color-success-light:    #ECFDF5;
+  --color-warning:          #F59E0B;
+  --color-warning-light:    #FFFBEB;
+  --color-error:            #EF4444;
+  --color-error-light:      #FEF2F2;
+  --color-info:             #3B82F6;
+  --color-info-light:       #EFF6FF;
 
   /* Sidebar */
-  --sidebar-bg: #0F172A;
-  --sidebar-text: #94A3B8;
-  --sidebar-text-active: #F8FAFC;
-  --sidebar-active-bg: rgba(99, 102, 241, 0.15);
-  --sidebar-hover-bg: rgba(255, 255, 255, 0.05);
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-width: 260px;
+  --sidebar-bg:             #0F172A;
+  --sidebar-text:           #94A3B8;
+  --sidebar-text-active:    #F8FAFC;
+  --sidebar-active-bg:      rgba(99, 102, 241, 0.15);
+  --sidebar-hover-bg:       rgba(255, 255, 255, 0.05);
+  --sidebar-border:         rgba(255, 255, 255, 0.08);
+  --sidebar-width:          260px;
 
   /* Topbar */
-  --topbar-bg: #FFFFFF;
-  --topbar-border: #E2E8F0;
-  --topbar-height: 64px;
+  --topbar-bg:              #FFFFFF;
+  --topbar-border:          #E2E8F0;
+  --topbar-height:          64px;
 
   /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.06);
-  --shadow-xl: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.06);
+  --shadow-xs:   0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-sm:   0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md:   0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg:   0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.06);
+  --shadow-xl:   0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.06);
   --shadow-accent: 0 0 0 3px rgba(99, 102, 241, 0.15);
 
   /* Border Radius */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
   --radius-full: 9999px;
 
   /* Transitions */
@@ -87,13 +87,13 @@ code, pre {
   font-size: 0.875em;
 }
 
-/* ─── Scrollbar ──────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 99px; }
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar         { width: 6px; height: 6px; }
+::-webkit-scrollbar-track   { background: transparent; }
+::-webkit-scrollbar-thumb   { background: var(--color-border-strong); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
 
-/* ─── Animations ─────────────────────────────────── */
+/* ─── Animations ─────────────────────────────────────────────────────────── */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -107,39 +107,53 @@ code, pre {
 }
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  100% { background-position:  200% 0; }
 }
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
 }
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
-.loading-spinner { animation: spin 0.8s linear infinite; }
-.fade-in         { animation: fadeUp 0.35s ease both; }
+/* Utility: spinning icon (used by sync icon in OfflineBanner) */
+.loading-spinner,
+[style*="animation: spin"] {
+  animation: spin 0.8s linear infinite;
+}
+.fade-in { animation: fadeUp 0.35s ease both; }
 
-/* ─── Utility Classes ────────────────────────────── */
+/* ─── Utility Classes ────────────────────────────────────────────────────── */
 .skeleton {
-  background: linear-gradient(90deg, var(--color-surface-2) 25%, var(--color-border) 50%, var(--color-surface-2) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-2) 25%,
+    var(--color-border) 50%,
+    var(--color-surface-2) 75%
+  );
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
   border-radius: var(--radius-sm);
 }
 
-/* ─── MUI Overrides ──────────────────────────────── */
+/* ─── MUI Overrides ──────────────────────────────────────────────────────── */
 
-/* Remove default MUI focus rings; use our own */
+/* Custom focus rings */
 .MuiButtonBase-root:focus-visible {
   outline: 2px solid var(--color-accent) !important;
   outline-offset: 2px !important;
 }
 
-/* Card overrides */
-.MuiCard-root, .MuiPaper-root {
+/* Card / Paper */
+.MuiCard-root,
+.MuiPaper-root {
   box-shadow: var(--shadow-sm) !important;
   border: 1px solid var(--color-border) !important;
 }
 
-/* Button overrides */
+/* Primary buttons */
 .MuiButton-containedPrimary {
   background: var(--color-accent) !important;
   box-shadow: 0 1px 2px rgba(99, 102, 241, 0.3) !important;
@@ -150,13 +164,13 @@ code, pre {
   transform: translateY(-1px);
 }
 
-/* Chip overrides */
+/* Chips */
 .MuiChip-root {
   font-family: 'DM Sans', sans-serif !important;
   font-weight: 500 !important;
 }
 
-/* TextField overrides */
+/* Text fields */
 .MuiOutlinedInput-root {
   border-radius: var(--radius-md) !important;
   font-family: 'DM Sans', sans-serif !important;
@@ -167,7 +181,7 @@ code, pre {
   border-width: 1.5px !important;
 }
 
-/* Table overrides */
+/* Table header */
 .MuiTableHead-root .MuiTableCell-root {
   font-weight: 600 !important;
   color: var(--color-text-secondary) !important;
@@ -178,7 +192,12 @@ code, pre {
   border-bottom: 1px solid var(--color-border) !important;
 }
 
-/* ─── Mobile ─────────────────────────────────────── */
+/* ─── Offline banner animation ───────────────────────────────────────────── */
+.offline-banner-enter {
+  animation: slide-down 250ms ease both;
+}
+
+/* ─── Mobile ─────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   body { font-size: 0.875rem; }
 }

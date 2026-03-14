@@ -23,9 +23,9 @@ import Settings from './pages/Settings';
 import Notifications from './pages/Notifications';
 import MyDocuments from './pages/MyDocuments';
 import SharePage from './pages/SharePage';
-
 import EligibleSchemes from './pages/EligibleSchemes';
 import FamilyDocumentsViewer from './pages/FamilyDocumentsViewer';
+import OfflineDocuments from './pages/OfflineDocuments';
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const theme = createTheme({
@@ -122,8 +122,8 @@ const theme = createTheme({
             borderColor: '#4F46E5',
           },
         },
-        sizeLarge:  { padding: '10px 22px', fontSize: '0.9375rem' },
-        sizeSmall:  { padding: '5px 12px', fontSize: '0.8125rem' },
+        sizeLarge: { padding: '10px 22px', fontSize: '0.9375rem' },
+        sizeSmall: { padding: '5px 12px',  fontSize: '0.8125rem' },
       },
     },
     MuiCard: {
@@ -133,19 +133,13 @@ const theme = createTheme({
           border: '1px solid #E2E8F0',
           boxShadow: '0 1px 3px rgba(15,23,42,0.06)',
           transition: 'box-shadow 200ms ease, transform 200ms ease',
-          '&:hover': {
-            boxShadow: '0 4px 12px rgba(15,23,42,0.1)',
-          },
+          '&:hover': { boxShadow: '0 4px 12px rgba(15,23,42,0.1)' },
         },
       },
     },
     MuiPaper: {
       styleOverrides: {
-        root: {
-          borderRadius: 14,
-          border: '1px solid #E2E8F0',
-          backgroundImage: 'none',
-        },
+        root: { borderRadius: 14, border: '1px solid #E2E8F0', backgroundImage: 'none' },
         elevation1: { boxShadow: '0 1px 3px rgba(15,23,42,0.06)' },
         elevation2: { boxShadow: '0 4px 6px -1px rgba(15,23,42,0.08)' },
         elevation3: { boxShadow: '0 10px 15px -3px rgba(15,23,42,0.08)' },
@@ -169,9 +163,7 @@ const theme = createTheme({
         root: {
           borderRadius: 10,
           background: '#FFFFFF',
-          '&:hover .MuiOutlinedInput-notchedOutline': {
-            borderColor: '#94A3B8',
-          },
+          '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#94A3B8' },
           '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
             borderColor: '#6366F1',
             borderWidth: '1.5px',
@@ -226,10 +218,7 @@ const theme = createTheme({
     },
     MuiAvatar: {
       styleOverrides: {
-        root: {
-          fontFamily: "'DM Sans', sans-serif",
-          fontWeight: 600,
-        },
+        root: { fontFamily: "'DM Sans', sans-serif", fontWeight: 600 },
       },
     },
     MuiBadge: {
@@ -306,33 +295,36 @@ function App() {
           <Router>
             <Routes>
 
-              {/* Public Routes */}
-              <Route path="/"                  element={<LandingPage />} />
-              <Route path="/login"             element={<Login />} />
-              <Route path="/signup"            element={<Signup />} />
-              <Route path="/share/:token"      element={<SharePage />} />
+              {/* ── Public Routes ── */}
+              <Route path="/"                   element={<LandingPage />} />
+              <Route path="/login"              element={<Login />} />
+              <Route path="/signup"             element={<Signup />} />
+              <Route path="/share/:token"       element={<SharePage />} />
               <Route path="/permissions/revoke" element={<RevokePermissions />} />
 
-              {/* Protected Routes */}
-              <Route path="/dashboard"         element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-              <Route path="/documents"         element={<PrivateRoute><Documents /></PrivateRoute>} />
-              <Route path="/analytics"         element={<PrivateRoute><Analytics /></PrivateRoute>} />
-              <Route path="/family"            element={<PrivateRoute><Family /></PrivateRoute>} />
-              <Route path="/family-members"    element={<PrivateRoute><FamilyMembers /></PrivateRoute>} />
-              <Route path="/permissions"       element={<PrivateRoute><Permissions /></PrivateRoute>} />
-              <Route path="/settings"          element={<PrivateRoute><Settings /></PrivateRoute>} />
-              <Route path="/notifications"     element={<PrivateRoute><Notifications /></PrivateRoute>} />
-              <Route path="/my-documents"      element={<PrivateRoute><MyDocuments /></PrivateRoute>} />
+              {/* ── Protected Routes ── */}
+              <Route path="/dashboard"          element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+              <Route path="/documents"          element={<PrivateRoute><Documents /></PrivateRoute>} />
+              <Route path="/analytics"          element={<PrivateRoute><Analytics /></PrivateRoute>} />
+              <Route path="/family"             element={<PrivateRoute><Family /></PrivateRoute>} />
+              <Route path="/family-members"     element={<PrivateRoute><FamilyMembers /></PrivateRoute>} />
+              <Route path="/permissions"        element={<PrivateRoute><Permissions /></PrivateRoute>} />
+              <Route path="/settings"           element={<PrivateRoute><Settings /></PrivateRoute>} />
+              <Route path="/notifications"      element={<PrivateRoute><Notifications /></PrivateRoute>} />
+              <Route path="/my-documents"       element={<PrivateRoute><MyDocuments /></PrivateRoute>} />
 
-              {/* Government Schemes */}
-              <Route path="/schemes"           element={<PrivateRoute><EligibleSchemes /></PrivateRoute>} />
-              <Route path="/eligible-schemes"  element={<PrivateRoute><EligibleSchemes /></PrivateRoute>} />
+              {/* ── Government Schemes ── */}
+              <Route path="/schemes"            element={<PrivateRoute><EligibleSchemes /></PrivateRoute>} />
+              <Route path="/eligible-schemes"   element={<PrivateRoute><EligibleSchemes /></PrivateRoute>} />
 
-              {/* Family Documents */}
-              <Route path="/family-documents"  element={<PrivateRoute><FamilyDocumentsViewer /></PrivateRoute>} />
+              {/* ── Family Documents ── */}
+              <Route path="/family-documents"   element={<PrivateRoute><FamilyDocumentsViewer /></PrivateRoute>} />
 
-              {/* 404 */}
-              <Route path="*"                  element={<Navigate to="/" replace />} />
+              {/* ── Offline Access (PWA) ── */}
+              <Route path="/offline-documents"  element={<PrivateRoute><OfflineDocuments /></PrivateRoute>} />
+
+              {/* ── 404 fallback ── */}
+              <Route path="*"                   element={<Navigate to="/" replace />} />
 
             </Routes>
           </Router>
