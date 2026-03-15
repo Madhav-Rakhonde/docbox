@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Container, Box, Typography, Button,
   Pagination, Dialog, DialogTitle, DialogContent,
@@ -9,9 +9,6 @@ import {
   CloudUpload,
   Search as SearchIcon,
   Clear as ClearIcon,
-  FilterList,
-  GridView,
-  ViewList,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 
@@ -25,6 +22,8 @@ import documentService from '../services/documentService';
 import categoryService from '../services/categoryService';
 import shareService from '../services/shareService';
 
+const POLL_INTERVAL_MS = 4000;
+
 const Documents = () => {
   const [documents, setDocuments]       = useState([]);
   const [allDocuments, setAllDocuments] = useState([]);
@@ -33,26 +32,25 @@ const Documents = () => {
   const [page, setPage]                 = useState(0);
   const [totalPages, setTotalPages]     = useState(0);
 
-  const [uploadOpen, setUploadOpen]   = useState(false);
-  const [viewerOpen, setViewerOpen]   = useState(false);
-  const [shareOpen, setShareOpen]     = useState(false);
-  const [deleteOpen, setDeleteOpen]   = useState(false);
+  const [uploadOpen, setUploadOpen]     = useState(false);
+  const [viewerOpen, setViewerOpen]     = useState(false);
+  const [shareOpen, setShareOpen]       = useState(false);
+  const [deleteOpen, setDeleteOpen]     = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
 
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [searchQuery, setSearchQuery]   = useState('');
   const [isSearching, setIsSearching]   = useState(false);
+  const [isDeleting, setIsDeleting]     = useState(false);
 
-  useEffect(() => {
-    loadDocuments();
-    loadCategories();
-  }, [page]);
+  const pollTimerRef = useRef(null);
 
-  const loadDocuments = async () => {
+  // ── Load documents ──────────────────────────────────────────────────────
+  const loadDocuments = useCallback(async () => {
     try {
       setLoading(true);
       const response = await documentService.getDocuments(page, 12);
-      const docs = response.data?.documents || response.data || [];
+      const docs     = response.data?.documents || response.data || [];
       setDocuments(docs);
       setAllDocuments(docs);
       setTotalPages(response.data?.totalPages || 0);
@@ -61,7 +59,7 @@ const Documents = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page]);
 
   const loadCategories = async () => {
     try {
@@ -70,6 +68,22 @@ const Documents = () => {
     } catch { /* silent */ }
   };
 
+  useEffect(() => {
+    loadDocuments();
+    loadCategories();
+  }, [loadDocuments]);
+
+  // ── Auto-poll when any document is PROCESSING ───────────────────────────
+  useEffect(() => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    const hasProcessing = allDocuments.some(d => d.processingStatus === 'PROCESSING');
+    if (hasProcessing) {
+      pollTimerRef.current = setTimeout(loadDocuments, POLL_INTERVAL_MS);
+    }
+    return () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
+  }, [allDocuments, loadDocuments]);
+
+  // ── Search ──────────────────────────────────────────────────────────────
   const handleSearch = (query) => {
     setSearchQuery(query);
     if (!query.trim()) {
@@ -82,8 +96,7 @@ const Documents = () => {
     setDocuments(allDocuments.filter(doc =>
       doc.originalFilename?.toLowerCase().includes(lq) ||
       doc.category?.name?.toLowerCase().includes(lq) ||
-      doc.notes?.toLowerCase().includes(lq) ||
-      doc.ocrText?.toLowerCase().includes(lq)
+      doc.notes?.toLowerCase().includes(lq)
     ));
   };
 
@@ -93,10 +106,11 @@ const Documents = () => {
     setIsSearching(false);
   };
 
-  const handleViewDocument      = (doc) => { setSelectedDocument(doc); setViewerOpen(true); };
-  const handleShare             = (doc) => { setSelectedDocument(doc); setShareOpen(true); };
-  const handleChangeCategory    = (doc) => { setSelectedDocument(doc); setCategoryOpen(true); };
-  const handleCreateCategory    = (doc) => { setSelectedDocument(doc); setCategoryOpen(true); };
+  // ── Document actions ────────────────────────────────────────────────────
+  const handleViewDocument   = (doc) => { setSelectedDocument(doc); setViewerOpen(true); };
+  const handleShare          = (doc) => { setSelectedDocument(doc); setShareOpen(true); };
+  const handleChangeCategory = (doc) => { setSelectedDocument(doc); setCategoryOpen(true); };
+  const handleCreateCategory = (doc) => { setSelectedDocument(doc); setCategoryOpen(true); };
 
   const handleCategoryChangeSuccess = () => {
     toast.success('Category updated!');
@@ -109,9 +123,7 @@ const Documents = () => {
     try {
       const blobUrl = await shareService.getQRCode(shareId);
       window.open(blobUrl, '_blank');
-    } catch {
-      toast.error('Failed to load QR code. Session might be expired.');
-    }
+    } catch { toast.error('Failed to load QR code.'); }
   };
 
   const handleDeleteClick = (doc) => {
@@ -120,42 +132,76 @@ const Documents = () => {
     setDeleteOpen(true);
   };
 
+  // ── OPTIMISTIC DELETE ───────────────────────────────────────────────────
+  // 1. Close dialog + remove card from UI instantly
+  // 2. Call API in background
+  // 3. Roll back + show error only if API fails
   const handleDeleteConfirm = async () => {
     if (!selectedDocument?.id) { setDeleteOpen(false); return; }
+
+    const docToDelete = selectedDocument;
+
+    // ── Step 1: instant UI update ──
+    setDeleteOpen(false);
+    setSelectedDocument(null);
+    setDocuments(prev => prev.filter(d => d.id !== docToDelete.id));
+    setAllDocuments(prev => prev.filter(d => d.id !== docToDelete.id));
+
+    // ── Step 2: background API call ──
+    setIsDeleting(true);
     try {
-      const result = await documentService.deleteDocument(selectedDocument.id);
-      if (result.success) {
-        toast.success('Document deleted');
-        setDeleteOpen(false);
-        setSelectedDocument(null);
-        loadDocuments();
-      } else {
-        toast.error(result.message || 'Failed to delete');
-      }
+      await documentService.deleteDocument(docToDelete.id);
+      toast.success('Document deleted');
     } catch {
-      toast.error('Failed to delete document');
+      // ── Step 3: roll back on failure ──
+      setDocuments(prev => [docToDelete, ...prev]);
+      setAllDocuments(prev => [docToDelete, ...prev]);
+      toast.error('Failed to delete document — restored');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
+  const processingCount = allDocuments.filter(d => d.processingStatus === 'PROCESSING').length;
+
   return (
     <Container maxWidth="xl" sx={{ animation: 'fadeUp 0.35s ease both' }}>
-      {/* ── Header ── */}
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+
+      {/* ── Header ──────────────────────────────────────────────────── */}
+      <Box sx={{
+        mb: 3, display: 'flex', alignItems: 'flex-start',
+        justifyContent: 'space-between', flexWrap: 'wrap', gap: 2,
+      }}>
         <Box>
           <Typography sx={{
             fontFamily: "'DM Serif Display', serif",
             fontSize: { xs: '1.75rem', sm: '2rem' },
-            fontWeight: 400,
-            color: '#0F172A',
-            letterSpacing: '-0.02em',
-            lineHeight: 1.2,
-            mb: 0.25,
+            fontWeight: 400, color: '#0F172A',
+            letterSpacing: '-0.02em', lineHeight: 1.2, mb: 0.25,
           }}>
             Documents
           </Typography>
-          <Typography sx={{ color: '#64748B', fontSize: '0.9rem' }}>
-            {loading ? 'Loading...' : `${allDocuments.length} document${allDocuments.length !== 1 ? 's' : ''} in your vault`}
-          </Typography>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ color: '#64748B', fontSize: '0.9rem' }}>
+              {loading
+                ? 'Loading…'
+                : `${allDocuments.length} document${allDocuments.length !== 1 ? 's' : ''} in your vault`}
+            </Typography>
+
+            {processingCount > 0 && (
+              <Chip
+                label={`${processingCount} processing`}
+                size="small"
+                sx={{
+                  height: 20, fontSize: '0.68rem', fontWeight: 600,
+                  background: 'rgba(99,102,241,0.1)',
+                  color: '#4F46E5',
+                  border: '1px solid rgba(99,102,241,0.25)',
+                }}
+              />
+            )}
+          </Box>
         </Box>
 
         <Button
@@ -163,45 +209,32 @@ const Documents = () => {
           startIcon={<CloudUpload sx={{ fontSize: 18 }} />}
           onClick={() => setUploadOpen(true)}
           sx={{
-            borderRadius: '10px',
-            px: 2.5,
-            py: 1.1,
-            fontWeight: 600,
+            borderRadius: '10px', px: 2.5, py: 1.1, fontWeight: 600,
             background: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)',
             '&:hover': {
               background: 'linear-gradient(135deg, #4F46E5 0%, #4338CA 100%)',
               transform: 'translateY(-1px)',
               boxShadow: '0 6px 16px rgba(99,102,241,0.35)',
             },
-          }}
-        >
+          }}>
           Upload
         </Button>
       </Box>
 
-      {/* ── Search Bar ── */}
+      {/* ── Search bar ───────────────────────────────────────────────── */}
       <Box sx={{
-        mb: 3,
-        p: 1.5,
-        background: '#FFFFFF',
-        borderRadius: '14px',
-        border: '1px solid #E2E8F0',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 1,
+        mb: 3, p: 1.5, background: '#FFFFFF', borderRadius: '14px',
+        border: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', gap: 1,
         boxShadow: '0 1px 3px rgba(15,23,42,0.04)',
       }}>
         <SearchIcon sx={{ color: '#94A3B8', ml: 1, flexShrink: 0 }} />
         <TextField
           fullWidth
           variant="standard"
-          placeholder="Search by name, category, or content…"
+          placeholder="Search by name or category…"
           value={searchQuery}
           onChange={(e) => handleSearch(e.target.value)}
-          InputProps={{
-            disableUnderline: true,
-            style: { fontSize: '0.9375rem' },
-          }}
+          InputProps={{ disableUnderline: true, style: { fontSize: '0.9375rem' } }}
           sx={{ '& .MuiInputBase-root': { background: 'transparent' } }}
         />
         {searchQuery && (
@@ -211,19 +244,22 @@ const Documents = () => {
         )}
       </Box>
 
-      {/* ── Search Results Banner ── */}
+      {/* ── Search results banner ────────────────────────────────────── */}
       {isSearching && (
-        <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ mb: 2 }}>
           <Chip
             label={`${documents.length} result${documents.length !== 1 ? 's' : ''} for "${searchQuery}"`}
             size="small"
             onDelete={handleClearSearch}
-            sx={{ background: 'rgba(99,102,241,0.1)', color: '#4F46E5', fontWeight: 500, border: '1px solid rgba(99,102,241,0.2)' }}
+            sx={{
+              background: 'rgba(99,102,241,0.1)', color: '#4F46E5',
+              fontWeight: 500, border: '1px solid rgba(99,102,241,0.2)',
+            }}
           />
         </Box>
       )}
 
-      {/* ── Document Grid ── */}
+      {/* ── Document grid ────────────────────────────────────────────── */}
       <DocumentGrid
         documents={documents}
         loading={loading}
@@ -235,7 +271,7 @@ const Documents = () => {
         onCreateCategory={handleCreateCategory}
       />
 
-      {/* ── Pagination ── */}
+      {/* ── Pagination ───────────────────────────────────────────────── */}
       {!isSearching && totalPages > 1 && (
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
           <Pagination
@@ -243,20 +279,14 @@ const Documents = () => {
             page={page + 1}
             onChange={(_, v) => setPage(v - 1)}
             sx={{
-              '& .MuiPaginationItem-root': {
-                borderRadius: '8px',
-                fontWeight: 500,
-              },
-              '& .Mui-selected': {
-                background: '#6366F1 !important',
-                color: 'white',
-              },
+              '& .MuiPaginationItem-root': { borderRadius: '8px', fontWeight: 500 },
+              '& .Mui-selected': { background: '#6366F1 !important', color: 'white' },
             }}
           />
         </Box>
       )}
 
-      {/* ── Dialogs ── */}
+      {/* ── Dialogs ──────────────────────────────────────────────────── */}
       <DocumentUpload
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
@@ -281,39 +311,36 @@ const Documents = () => {
         onSuccess={handleCategoryChangeSuccess}
       />
 
-      {/* Delete Confirmation */}
+      {/* ── Delete confirmation ───────────────────────────────────────── */}
       <Dialog
         open={deleteOpen}
         onClose={() => { setDeleteOpen(false); setSelectedDocument(null); }}
-        PaperProps={{ sx: { borderRadius: '16px', p: 0.5 } }}
-      >
+        PaperProps={{ sx: { borderRadius: '16px', p: 0.5 } }}>
         <DialogTitle sx={{ pt: 3, px: 3, fontWeight: 700 }}>Delete Document?</DialogTitle>
         <DialogContent sx={{ px: 3 }}>
           <DialogContentText sx={{ color: '#475569', fontSize: '0.9rem' }}>
             {selectedDocument
-              ? <>Are you sure you want to permanently delete <strong style={{ color: '#0F172A' }}>"{selectedDocument.originalFilename}"</strong>? This cannot be undone.</>
-              : 'No document selected.'
-            }
+              ? <>Are you sure you want to permanently delete{' '}
+                  <strong style={{ color: '#0F172A' }}>"{selectedDocument.originalFilename}"</strong>?
+                  This cannot be undone.</>
+              : 'No document selected.'}
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
           <Button
             onClick={() => { setDeleteOpen(false); setSelectedDocument(null); }}
-            sx={{ borderRadius: '8px', color: '#64748B', '&:hover': { background: '#F1F5F9' } }}
-          >
+            sx={{ borderRadius: '8px', color: '#64748B', '&:hover': { background: '#F1F5F9' } }}>
             Cancel
           </Button>
           <Button
             color="error"
             variant="contained"
             onClick={handleDeleteConfirm}
-            disabled={!selectedDocument?.id}
+            disabled={!selectedDocument?.id || isDeleting}
             sx={{
-              borderRadius: '8px',
-              background: '#EF4444',
+              borderRadius: '8px', background: '#EF4444',
               '&:hover': { background: '#DC2626', boxShadow: '0 4px 12px rgba(239,68,68,0.3)' },
-            }}
-          >
+            }}>
             Delete
           </Button>
         </DialogActions>

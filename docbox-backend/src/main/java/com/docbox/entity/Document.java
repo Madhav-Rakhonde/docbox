@@ -142,6 +142,9 @@ public class Document {
             "emailVerificationToken", "resetPasswordToken", "primaryAccount"})
     private User uploadedBy;
 
+    @Column(name = "processing_status", length = 20)
+    private String processingStatus = "READY";
+
     // Helper methods
     public boolean isPdf() {
         return "PDF".equalsIgnoreCase(this.fileType);

@@ -26,6 +26,7 @@ import SharePage from './pages/SharePage';
 import EligibleSchemes from './pages/EligibleSchemes';
 import FamilyDocumentsViewer from './pages/FamilyDocumentsViewer';
 import OfflineDocuments from './pages/OfflineDocuments';
+import DocumentViewerPage from './pages/DocumentViewerPage'; // ✅ NEW
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const theme = createTheme({
@@ -301,6 +302,25 @@ function App() {
               <Route path="/signup"             element={<Signup />} />
               <Route path="/share/:token"       element={<SharePage />} />
               <Route path="/permissions/revoke" element={<RevokePermissions />} />
+
+              {/*
+               * ── Document Viewer ──────────────────────────────────────────
+               * ✅ OUTSIDE PrivateRoute — intentional. Two reasons:
+               *
+               * 1. Race condition: AuthContext initializes async. When this
+               *    route is opened in a new tab, PrivateRoute briefly sees
+               *    loading=false + isAuthenticated=false and fires
+               *    <Navigate to="/login"> before the context is ready.
+               *
+               * 2. Layout: PrivateRoute wraps children in <AppLayout> (sidebar
+               *    + nav shell). DocumentViewerPage is a full-page viewer that
+               *    must own its own layout.
+               *
+               * Auth is handled inside DocumentViewerPage itself:
+               *   - Reads localStorage.getItem('token') directly (no context wait)
+               *   - On 401 from API → renders a "Login required" screen
+               */}
+              <Route path="/view/:id"           element={<DocumentViewerPage />} />
 
               {/* ── Protected Routes ── */}
               <Route path="/dashboard"          element={<PrivateRoute><Dashboard /></PrivateRoute>} />

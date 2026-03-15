@@ -757,6 +757,14 @@ public class DocumentClassificationService {
     // ════════════════════════════════════════════════════════════════════════════
     private void arbitrate(Map<String, Integer> scores, String lower, String original) {
 
+        // ── Scholarship: hard-zero Domicile and Caste so they can't win ──
+        boolean isScholarship = lower.contains("scholarship")
+                || original.contains("शिष्यवृत्ती");
+        if (isScholarship) {
+            scores.put("Domicile Certificate", 0);
+            scores.put("Caste Certificate",    0);
+        }
+
         // ── PRE-PASS: Hard suppression for Maharashtra Age/Nationality/Domicile cert ──
         // This certificate explicitly lists "Ration Card", "Birth Certificate", "UID"
         // etc. as PROOFS SUBMITTED. Those mentions must not classify the document as
@@ -2187,6 +2195,25 @@ public class DocumentClassificationService {
 
     private int scoreEducation(String lower, String original) {
         int s = 0;
+
+        // ── Scholarship signals (must land in Education, not Domicile/Caste) ──
+        if (lower.contains("scholarship"))                                         s += 60;
+        if (lower.contains("shishyavrutti") || original.contains("शिष्यवृत्ती")) s += 60;
+        if (lower.contains("fellowship") || lower.contains("stipend"))            s += 45;
+        if (lower.contains("meritorious") || lower.contains("merit scholarship")) s += 50;
+        if (lower.contains("post matric") || lower.contains("pre matric"))        s += 50;
+        if (lower.contains("sc/st scholarship") || lower.contains("obc scholarship")) s += 50;
+        if (lower.contains("minority scholarship"))                                s += 50;
+        if (lower.contains("national scholarship") || lower.contains("nsp"))      s += 45;
+        if (lower.contains("scholarship amount") || lower.contains("award amount")) s += 45;
+        if (lower.contains("renewal of scholarship"))                              s += 50;
+        if (lower.contains("scholarship sanctioned") || lower.contains("grant of scholarship")) s += 50;
+        if (lower.contains("social welfare") && lower.contains("scholarship"))    s += 45;
+        if (lower.contains("mahadbct") || lower.contains("barti"))                s += 40;
+        if (original.contains("शिष्यवृत्ती मंजूर") || original.contains("शिष्यवृत्ती प्रमाणपत्र")) s += 60;
+        if (original.contains("शिष्यवृत्ती अर्ज") || original.contains("शिष्यवृत्ती योजना"))      s += 55;
+
+        // ── Existing signals (unchanged) ──
         if (lower.contains("marksheet") || lower.contains("mark sheet"))        s += 55;
         if (lower.contains("degree certificate"))                                s += 55;
         if (lower.contains("diploma certificate"))                               s += 50;
@@ -2208,30 +2235,22 @@ public class DocumentClassificationService {
         if (original.contains("विद्यापीठ"))                                     s += 25;
         if (lower.contains("cbse") || lower.contains("icse") || lower.contains("nios")) s += 40;
         if (lower.contains("provisional certificate") || lower.contains("migration certificate")) s += 30;
-        // NEW: School leaving certificate — very common document type
         if (lower.contains("school leaving certificate") || lower.contains("leaving certificate")) s += 55;
         if (lower.contains("transfer certificate") || lower.contains("t.c."))   s += 45;
-        // NEW: "hall ticket" or "admit card" — exam-related edu documents
         if (lower.contains("hall ticket") || lower.contains("admit card"))       s += 40;
-        // NEW: "roll number" — appears on marksheets
         if (lower.contains("roll no") || lower.contains("roll number"))          s += 20;
-        // NEW: "seat number" — Maharashtra board uses seat number
         if (lower.contains("seat no") || lower.contains("seat number"))          s += 20;
-        // NEW: Maharashtra board signals
         if (lower.contains("maharashtra state board") || lower.contains("msbshse")) s += 50;
         if (lower.contains("pune board") || lower.contains("nagpur board") || lower.contains("aurangabad board")) s += 35;
-        // NEW: "pass" or "fail" — result outcome on marksheets
         if ((lower.contains(" pass") || lower.contains("passed")) &&
                 (lower.contains("examination") || lower.contains("exam")))           s += 20;
-        // NEW: "subject" and "max marks" and "marks obtained" combo
         if (lower.contains("max. marks") || lower.contains("maximum marks"))     s += 20;
-        // NEW: "bonafide certificate" from school/college
         if (lower.contains("bonafide certificate") || lower.contains("bona fide certificate")) s += 40;
-        // NEW: UGC / AICTE signal university degrees
         if (lower.contains("ugc") || lower.contains("aicte") || lower.contains("approved by")) {
             if (lower.contains("university") || lower.contains("college")) s += 20;
         }
-        return Math.min(130, s);
+
+        return Math.min(200, s);  // raised cap from 130 to 200 to allow scholarship scores to dominate
     }
 
     private int scoreMedical(String lower, String original) {

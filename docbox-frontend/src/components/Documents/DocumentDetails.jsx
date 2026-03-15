@@ -1,521 +1,439 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  Box,
-  Typography,
-  IconButton,
-  Grid,
-  Chip,
-  Divider,
-  Alert,
-  CircularProgress,
-  TextField,
-  MenuItem,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  Card,
-  CardContent,
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  Button, Box, Typography, IconButton, Grid, Chip, Divider,
+  Alert, CircularProgress, TextField, MenuItem,
+  Card, CardContent,
 } from '@mui/material';
 import {
-  Close,
-  Download,
-  Share,
-  Delete,
-  Edit,
-  Visibility,
-  Person,
-  CalendarToday,
-  Category,
-  Description,
-  Link as LinkIcon,
-  QrCode2,
-  Lock,
-  ContentCopy,
+  Close, Download, Share, Delete, Edit, OpenInNew,
+  Category, Link as LinkIcon, Lock, ContentCopy,
+  HourglassEmpty, CheckCircle, ErrorOutline,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import documentService from '../../services/documentService';
+import api, { endpoints } from '../../services/api';
+import { openDocumentInTab } from '../../services/openDocumentInTab';
 import shareLinkService from '../../services/shareLinkService';
 import categoryService from '../../services/categoryService';
-import DocumentViewer from './DocumentViewer';
 
-// API_BASE should point to the full API root. The .env value may already include `/api`.
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
-
+/**
+ * DocumentDetails
+ * src/components/Documents/DocumentDetails.jsx
+ *
+ * Full document detail panel: edit, share, delete, view, download.
+ * "View" calls openDocumentInTab() — synchronous, tab opens in < 100ms.
+ */
 const DocumentDetails = ({ open, onClose, document: initialDocument, onUpdate, onDelete }) => {
-  const [document, setDocument] = useState(initialDocument);
-  const [loading, setLoading] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [editedNotes, setEditedNotes] = useState('');
+  const [document,       setDocument]       = useState(initialDocument);
+  const [loading,        setLoading]        = useState(false);
+  const [editing,        setEditing]        = useState(false);
+  const [editedNotes,    setEditedNotes]    = useState('');
   const [editedCategory, setEditedCategory] = useState('');
-  const [categories, setCategories] = useState([]);
-  const [shareLinks, setShareLinks] = useState([]);
-  const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [qrDialogOpen, setQrDialogOpen] = useState(false);
-  const [qrCodeUrl, setQrCodeUrl] = useState(null);
-  const [viewerOpen, setViewerOpen] = useState(false);
+  const [categories,     setCategories]     = useState([]);
+  const [shareLinks,     setShareLinks]     = useState([]);
 
   useEffect(() => {
-    if (open && document) {
-      setDocument(document);
-      setEditedNotes(document.notes || '');
-      setEditedCategory(document.category?.id || '');
+    if (open && initialDocument) {
+      setDocument(initialDocument);
+      setEditedNotes(initialDocument.notes || '');
+      setEditedCategory(initialDocument.category?.id || '');
       loadCategories();
-      loadShareLinks();
+      loadShareLinks(initialDocument.id);
     }
-  }, [open, document]);
+  }, [open, initialDocument]);
 
   const loadCategories = async () => {
     try {
-      const response = await categoryService.getCategories();
-      if (response.success) {
-        setCategories(response.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to load categories:', error);
-    }
+      const res = await categoryService.getCategories();
+      if (res.success) setCategories(res.data || []);
+    } catch (e) { console.error('Failed to load categories:', e); }
   };
 
-  const loadShareLinks = async () => {
+  const loadShareLinks = async (docId) => {
     try {
-      const response = await shareLinkService.getMyShares();
-      if (response.success) {
-        const docLinks = (response.data || []).filter(
-          (link) => link.documentId === document.id
-        );
-        setShareLinks(docLinks);
+      const res = await shareLinkService.getMyShares();
+      if (res.success) {
+        setShareLinks((res.data || []).filter((l) => l.documentId === docId));
       }
-    } catch (error) {
-      console.error('Failed to load share links:', error);
-    }
+    } catch (e) { console.error('Failed to load share links:', e); }
   };
 
+  // ── View — synchronous, opens tab in < 100ms ─────────────────────────────
+  const handleView = () => {
+    openDocumentInTab(document, (msg) => toast.error(msg));
+  };
+
+  // ── Download ──────────────────────────────────────────────────────────────
   const handleDownload = async () => {
     try {
       setLoading(true);
-      const response = await documentService.downloadDocument(document.id);
-      
-      const url = window.URL.createObjectURL(new Blob([response]));
-      const link = window.createElement('a');
-      link.href = url;
+      const response = await api.get(
+        `${endpoints.documents}/${document.id}/download`,
+        { responseType: 'blob' }
+      );
+      const url  = window.URL.createObjectURL(response.data);
+      const link = window.document.createElement('a');
+      link.href  = url;
       link.setAttribute('download', document.originalFilename);
-      document.body.appendChild(link);
+      window.document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-
       toast.success('Download started!');
-    } catch (error) {
-      console.error('Download error:', error);
+    } catch (e) {
+      console.error('Download error:', e);
       toast.error('Failed to download document');
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Save edit ─────────────────────────────────────────────────────────────
   const handleSaveEdit = async () => {
     try {
       setLoading(true);
-      const response = await documentService.updateDocument(document.id, {
-        notes: editedNotes,
-        categoryId: editedCategory,
-      });
-
-      if (response.success) {
-        setDocument(response.data);
-        setEditing(false);
-        toast.success('Document updated successfully!');
-        if (onUpdate) onUpdate(response.data);
-      }
-    } catch (error) {
-      console.error('Update error:', error);
+      const response = await api.put(
+        `${endpoints.documents}/${document.id}`,
+        { notes: editedNotes, categoryId: editedCategory }
+      );
+      const updated = response.data?.data || response.data;
+      setDocument(updated);
+      setEditing(false);
+      toast.success('Document updated!');
+      if (onUpdate) onUpdate(updated);
+    } catch (e) {
+      console.error('Update error:', e);
       toast.error('Failed to update document');
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Delete ────────────────────────────────────────────────────────────────
   const handleDelete = async () => {
-    if (window.confirm('Are you sure you want to delete this document?')) {
-      try {
-        setLoading(true);
-        await documentService.deleteDocument(document.id);
-        toast.success('Document deleted successfully!');
-        if (onDelete) onDelete(document.id);
-        onClose();
-      } catch (error) {
-        console.error('Delete error:', error);
-        toast.error('Failed to delete document');
-      } finally {
-        setLoading(false);
-      }
+    if (!window.confirm('Are you sure you want to delete this document?')) return;
+    try {
+      setLoading(true);
+      await api.delete(`${endpoints.documents}/${document.id}`);
+      toast.success('Document deleted!');
+      if (onDelete) onDelete(document.id);
+      onClose();
+    } catch (e) {
+      console.error('Delete error:', e);
+      toast.error('Failed to delete document');
+    } finally {
+      setLoading(false);
     }
   };
 
+  // ── Share ─────────────────────────────────────────────────────────────────
   const handleShare = async () => {
     try {
       setLoading(true);
-      const response = await shareLinkService.createShareLink({
-        documentId: document.id,
-        expiryHours: 72,
-        allowDownload: true,
+      const res = await shareLinkService.createShareLink({
+        documentId: document.id, expiryHours: 72, allowDownload: true,
       });
-
-      if (response.success) {
+      if (res.success) {
         toast.success('Share link created!');
-        loadShareLinks();
-        setShareDialogOpen(true);
+        loadShareLinks(document.id);
       }
-    } catch (error) {
-      console.error('Share error:', error);
+    } catch (e) {
+      console.error('Share error:', e);
       toast.error('Failed to create share link');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopyShareLink = (shareUrl) => {
-    navigator.clipboard.writeText(shareUrl);
-    toast.success('Link copied to clipboard!');
+  const handleCopyLink = (url) => {
+    navigator.clipboard.writeText(url);
+    toast.success('Link copied!');
   };
 
-  const handleViewQRCode = async (shareLink) => {
+  const handleDeleteShareLink = async (linkId) => {
+    if (!window.confirm('Delete this share link?')) return;
     try {
-      setLoading(true);
-      const response = await shareLinkService.getQRCode(shareLink.id);
-      
-      const url = URL.createObjectURL(response);
-      setQrCodeUrl(url);
-      setQrDialogOpen(true);
-    } catch (error) {
-      console.error('Failed to load QR code:', error);
-      toast.error('Failed to load QR code');
-    } finally {
-      setLoading(false);
-    }
+      await shareLinkService.deleteShareLink(linkId);
+      toast.success('Share link deleted!');
+      loadShareLinks(document.id);
+    } catch { toast.error('Failed to delete share link'); }
   };
 
-  const handleDeleteShareLink = async (shareLinkId) => {
-    if (window.confirm('Delete this share link?')) {
-      try {
-        await shareLinkService.deleteShareLink(shareLinkId);
-        toast.success('Share link deleted!');
-        loadShareLinks();
-      } catch (error) {
-        console.error('Failed to delete share link:', error);
-        toast.error('Failed to delete share link');
-      }
-    }
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
+  // ── Formatting ────────────────────────────────────────────────────────────
+  const formatDate = (ds) => {
+    if (!ds) return 'N/A';
+    return new Date(ds).toLocaleDateString('en-IN', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
     });
   };
 
   const formatFileSize = (bytes) => {
     if (!bytes) return 'N/A';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    if (bytes < 1024)        return bytes + ' B';
+    if (bytes < 1_048_576)   return (bytes / 1024).toFixed(2) + ' KB';
+    return (bytes / 1_048_576).toFixed(2) + ' MB';
   };
 
   if (!document) return null;
 
+  const isProcessing = document.processingStatus === 'PROCESSING';
+  const isFailed     = document.processingStatus === 'FAILED';
+
   return (
-    <>
-      <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="h6">Document Details</Typography>
-            <IconButton onClick={onClose} size="small">
-              <Close />
-            </IconButton>
-          </Box>
-        </DialogTitle>
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
+      PaperProps={{ sx: { borderRadius: '16px' } }}>
 
-        <DialogContent dividers>
-          <Grid container spacing={3}>
-            {/* Preview Section */}
-            <Grid item xs={12} md={5}>
-              <Box
-                sx={{
-                  height: 300,
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: 1,
-                  borderColor: 'divider',
-                }}
-              >
-                {document.thumbnailPath ? (
-                  <img
-                    src={`${API_BASE}/documents/${document.id}/thumbnail`}
-                    alt="Thumbnail"
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                  />
-                ) : (
-                  <Typography variant="body2" color="text.secondary">
-                    No Preview
-                  </Typography>
-                )}
-              </Box>
-            </Grid>
+      {/* ── Title ────────────────────────────────────────────────────── */}
+      <DialogTitle sx={{ borderBottom: '1px solid #F1F5F9', px: 3, py: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography sx={{ fontWeight: 700, fontSize: '1rem', color: '#0F172A' }}>
+            Document Details
+          </Typography>
+          <IconButton onClick={onClose} size="small"
+            sx={{ color: '#94A3B8', '&:hover': { background: '#F1F5F9' } }}>
+            <Close />
+          </IconButton>
+        </Box>
+      </DialogTitle>
 
-            {/* Details Section */}
-            <Grid item xs={12} md={7}>
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  File Name
-                </Typography>
-                <Typography variant="body1" fontWeight={600}>
-                  {document.originalFilename}
-                </Typography>
-              </Box>
+      <DialogContent sx={{ px: 3, py: 3 }}>
 
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Category
-                </Typography>
-                {editing ? (
-                  <TextField
-                    select
-                    fullWidth
-                    size="small"
-                    value={editedCategory}
-                    onChange={(e) => setEditedCategory(e.target.value)}
-                  >
-                    {categories.map((cat) => (
-                      <MenuItem key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                ) : (
-                  <Chip
-                    label={document.category?.name || 'Others'}
-                    icon={<Category />}
-                    color="primary"
-                    size="small"
-                  />
-                )}
-              </Box>
+        {/* ── Processing / failed banners ──────────────────────────── */}
+        {isProcessing && (
+          <Alert severity="info" icon={<HourglassEmpty />}
+            sx={{ mb: 2.5, borderRadius: '10px', fontSize: '0.825rem' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.825rem' }}>
+              🤖 AI is processing this document
+            </Typography>
+            <Typography sx={{ fontSize: '0.75rem', mt: 0.25 }}>
+              Category and expiry date are being detected. Usually takes up to 2 minutes.
+            </Typography>
+          </Alert>
+        )}
+        {isFailed && (
+          <Alert severity="warning" icon={<ErrorOutline />}
+            sx={{ mb: 2.5, borderRadius: '10px', fontSize: '0.825rem' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: '0.825rem' }}>
+              ⚠️ Auto-detection failed
+            </Typography>
+            <Typography sx={{ fontSize: '0.75rem', mt: 0.25 }}>
+              Could not read text from this document. Please set the category manually.
+            </Typography>
+          </Alert>
+        )}
 
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    File Size
-                  </Typography>
-                  <Typography variant="body2">{formatFileSize(document.fileSize)}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    File Type
-                  </Typography>
-                  <Typography variant="body2">{document.fileType}</Typography>
-                </Grid>
-              </Grid>
+        {/* ── Document info ─────────────────────────────────────────── */}
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={7}>
 
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Document Number
-                  </Typography>
-                  <Typography variant="body2">{document.documentNumber || 'N/A'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Upload Date
-                  </Typography>
-                  <Typography variant="body2">{formatDate(document.createdAt)}</Typography>
-                </Grid>
-              </Grid>
-
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Issue Date
-                  </Typography>
-                  <Typography variant="body2">{formatDate(document.issueDate)}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Expiry Date
-                  </Typography>
-                  <Typography variant="body2">{formatDate(document.expiryDate)}</Typography>
-                </Grid>
-              </Grid>
-
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Notes
-                </Typography>
-                {editing ? (
-                  <TextField
-                    fullWidth
-                    multiline
-                    rows={3}
-                    size="small"
-                    value={editedNotes}
-                    onChange={(e) => setEditedNotes(e.target.value)}
-                    placeholder="Add notes..."
-                  />
-                ) : (
-                  <Typography variant="body2">{document.notes || 'No notes'}</Typography>
-                )}
-              </Box>
-            </Grid>
-          </Grid>
-
-          {/* Share Links Section */}
-          {shareLinks.length > 0 && (
-            <>
-              <Divider sx={{ my: 3 }} />
-              <Typography variant="h6" gutterBottom>
-                Active Share Links
+            {/* Filename */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                Filename
               </Typography>
-              <List>
-                {shareLinks.map((link) => (
-                  <Card key={link.id} sx={{ mb: 2 }}>
-                    <CardContent>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                        <LinkIcon fontSize="small" />
-                        <Typography variant="body2" sx={{ flex: 1, fontFamily: 'monospace' }}>
-                          {link.shareUrl}
-                        </Typography>
-                        <IconButton
-                          size="small"
-                          onClick={() => handleCopyShareLink(link.shareUrl)}
-                        >
-                          <ContentCopy fontSize="small" />
-                        </IconButton>
-                      </Box>
-                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-                        <Chip label={`Expires: ${formatDate(link.expiresAt)}`} size="small" />
-                        {link.requiresPassword && (
-                          <Chip icon={<Lock />} label="Password Protected" size="small" />
-                        )}
-                        {link.maxViews && (
-                          <Chip
-                            label={`Views: ${link.viewCount}/${link.maxViews}`}
-                            size="small"
-                          />
-                        )}
-                      </Box>
-                      <Box sx={{ display: 'flex', gap: 1 }}>
-                        <Button
-                          size="small"
-                          startIcon={<QrCode2 />}
-                          onClick={() => handleViewQRCode(link)}
-                        >
-                          View QR
-                        </Button>
-                        <Button
-                          size="small"
-                          color="error"
-                          onClick={() => handleDeleteShareLink(link.id)}
-                        >
-                          Delete
-                        </Button>
-                      </Box>
-                    </CardContent>
-                  </Card>
-                ))}
-              </List>
-            </>
-          )}
-        </DialogContent>
-
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={handleDelete} color="error" startIcon={<Delete />}>
-            Delete
-          </Button>
-          <Box sx={{ flex: 1 }} />
-          {editing ? (
-            <>
-              <Button onClick={() => setEditing(false)}>Cancel</Button>
-              <Button
-                variant="contained"
-                onClick={handleSaveEdit}
-                disabled={loading}
-                startIcon={loading ? <CircularProgress size={20} /> : null}
-              >
-                Save
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={() => setEditing(true)} startIcon={<Edit />}>
-                Edit
-              </Button>
-              <Button onClick={() => setViewerOpen(true)} startIcon={<Visibility />}>
-                View
-              </Button>
-              <Button onClick={handleDownload} startIcon={<Download />}>
-                Download
-              </Button>
-              <Button
-                variant="contained"
-                onClick={handleShare}
-                startIcon={<Share />}
-                disabled={loading}
-              >
-                Share
-              </Button>
-            </>
-          )}
-        </DialogActions>
-      </Dialog>
-
-      {/* QR Code Dialog */}
-      <Dialog open={qrDialogOpen} onClose={() => setQrDialogOpen(false)} maxWidth="sm">
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="h6">QR Code</Typography>
-            <IconButton onClick={() => setQrDialogOpen(false)} size="small">
-              <Close />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent sx={{ textAlign: 'center', p: 4 }}>
-          {qrCodeUrl ? (
-            <Box>
-              <img
-                src={qrCodeUrl}
-                alt="QR Code"
-                style={{ width: '100%', maxWidth: 300, height: 'auto' }}
-              />
-              <Typography variant="caption" display="block" sx={{ mt: 2 }} color="text.secondary">
-                Scan this code to access the document
+              <Typography sx={{
+                fontWeight: 600, fontSize: '0.9rem',
+                color: '#0F172A', wordBreak: 'break-all',
+              }}>
+                {document.originalFilename}
               </Typography>
             </Box>
-          ) : (
-            <CircularProgress />
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setQrDialogOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
 
-      {/* Document Viewer */}
-      <DocumentViewer
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        document={document}
-      />
-    </>
+            {/* Category */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                Category
+              </Typography>
+              {editing ? (
+                <TextField select fullWidth size="small"
+                  value={editedCategory}
+                  onChange={(e) => setEditedCategory(e.target.value)}>
+                  {categories.map((cat) => (
+                    <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+                  ))}
+                </TextField>
+              ) : (
+                <Chip
+                  label={document.category?.name || 'Others'}
+                  icon={<Category sx={{ fontSize: 14 }} />}
+                  color="primary" size="small"
+                />
+              )}
+            </Box>
+
+            {/* File size & type */}
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={6}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  File Size
+                </Typography>
+                <Typography variant="body2">{formatFileSize(document.fileSize)}</Typography>
+              </Grid>
+              <Grid item xs={6}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  File Type
+                </Typography>
+                <Typography variant="body2">{document.fileType?.toUpperCase()}</Typography>
+              </Grid>
+            </Grid>
+
+            {/* Dates */}
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={6}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Upload Date
+                </Typography>
+                <Typography variant="body2">{formatDate(document.createdAt)}</Typography>
+              </Grid>
+              <Grid item xs={6}>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Expiry Date
+                </Typography>
+                <Typography variant="body2">{formatDate(document.expiryDate)}</Typography>
+              </Grid>
+            </Grid>
+
+            {/* Notes */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                Notes
+              </Typography>
+              {editing ? (
+                <TextField fullWidth multiline rows={3} size="small"
+                  value={editedNotes}
+                  onChange={(e) => setEditedNotes(e.target.value)}
+                  placeholder="Add notes…" />
+              ) : (
+                <Typography variant="body2">{document.notes || 'No notes'}</Typography>
+              )}
+            </Box>
+          </Grid>
+
+          {/* ── Status chips ──────────────────────────────────────── */}
+          <Grid item xs={12} md={5}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {document.isFavorite && (
+                <Chip label="⭐ Favourite" size="small" color="warning" variant="outlined" />
+              )}
+              {document.isArchived && (
+                <Chip label="📦 Archived" size="small" color="default" variant="outlined" />
+              )}
+              {document.isExpired && (
+                <Chip label="❌ Expired" size="small" color="error" />
+              )}
+              {document.isExpiringSoon && !document.isExpired && (
+                <Chip label="⚠️ Expiring Soon" size="small" color="warning" />
+              )}
+              {isProcessing && (
+                <Chip
+                  icon={<CircularProgress size={10} sx={{ color: '#6366F1 !important' }} />}
+                  label="Processing…" size="small"
+                  sx={{
+                    background: 'rgba(99,102,241,0.1)', color: '#4F46E5',
+                    border: '1px solid rgba(99,102,241,0.25)',
+                  }}
+                />
+              )}
+              {document.processingStatus === 'READY' && (
+                <Chip
+                  icon={<CheckCircle sx={{ fontSize: 14, color: '#10B981 !important' }} />}
+                  label="Ready" size="small"
+                  sx={{
+                    background: 'rgba(16,185,129,0.08)', color: '#059669',
+                    border: '1px solid rgba(16,185,129,0.2)',
+                  }}
+                />
+              )}
+            </Box>
+          </Grid>
+        </Grid>
+
+        {/* ── Active share links ─────────────────────────────────── */}
+        {shareLinks.length > 0 && (
+          <>
+            <Divider sx={{ my: 3 }} />
+            <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', mb: 1.5, color: '#0F172A' }}>
+              Active Share Links
+            </Typography>
+            {shareLinks.map((link) => (
+              <Card key={link.id} elevation={0}
+                sx={{ mb: 1.5, border: '1px solid #E2E8F0', borderRadius: '10px' }}>
+                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <LinkIcon sx={{ fontSize: 14, color: '#6366F1', flexShrink: 0 }} />
+                    <Typography sx={{
+                      flex: 1, fontFamily: 'monospace', fontSize: '0.75rem',
+                      color: '#475569', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {link.shareUrl}
+                    </Typography>
+                    <IconButton size="small" onClick={() => handleCopyLink(link.shareUrl)}>
+                      <ContentCopy sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                    <Chip label={`Expires: ${formatDate(link.expiresAt)}`} size="small" />
+                    {link.requiresPassword && (
+                      <Chip icon={<Lock sx={{ fontSize: 12 }} />}
+                        label="Password protected" size="small" />
+                    )}
+                    {link.maxViews && (
+                      <Chip label={`Views: ${link.viewCount || 0}/${link.maxViews}`}
+                        size="small" />
+                    )}
+                  </Box>
+                  <Button size="small" color="error"
+                    onClick={() => handleDeleteShareLink(link.id)}>
+                    Delete Link
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </>
+        )}
+      </DialogContent>
+
+      {/* ── Action bar ───────────────────────────────────────────────── */}
+      <DialogActions sx={{ px: 3, py: 2, borderTop: '1px solid #F1F5F9', gap: 1 }}>
+        <Button onClick={handleDelete} color="error" startIcon={<Delete />} disabled={loading}>
+          Delete
+        </Button>
+        <Box sx={{ flex: 1 }} />
+        {editing ? (
+          <>
+            <Button onClick={() => setEditing(false)}>Cancel</Button>
+            <Button variant="contained" onClick={handleSaveEdit} disabled={loading}
+              startIcon={loading ? <CircularProgress size={16} /> : null}>
+              Save
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button startIcon={<Edit />} onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+
+            {/* View — opens new tab instantly (synchronous) */}
+            <Button
+              startIcon={<OpenInNew />}
+              onClick={handleView}
+              disabled={isProcessing}>
+              View
+            </Button>
+
+            <Button startIcon={<Download />} onClick={handleDownload} disabled={loading}>
+              Download
+            </Button>
+
+            <Button variant="contained" startIcon={<Share />}
+              onClick={handleShare} disabled={loading || isProcessing}>
+              Share
+            </Button>
+          </>
+        )}
+      </DialogActions>
+    </Dialog>
   );
 };
 
