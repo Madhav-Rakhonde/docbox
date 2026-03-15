@@ -34,6 +34,7 @@ export const openDocumentInTab = (document, onError) => {
     return;
   }
 
+  // Always use the SPA viewer route. DocumentViewerPage now handles offline gracefully.
   const tab = window.open(`/view/${document.id}`, '_blank');
 
   if (!tab) {

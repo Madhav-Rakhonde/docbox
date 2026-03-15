@@ -22,6 +22,14 @@ import java.util.*;
  * This is the heart of DocBox's access control system
  *
  * Every document access MUST go through this service
+ *
+ * FIX v2.0:
+ *   1. getPermissionLevel() now checks CategoryPermission (Rule 3.5)
+ *      — previously category permissions were stored but never consulted,
+ *        meaning grantCategoryPermission() had zero effect on actual access.
+ *   2. getGrantedDocumentPermissions() / getGrantedCategoryPermissions()
+ *      now use targeted repository queries instead of findAll()
+ *      — findAll() on large tables is a production killer.
  */
 @Service
 public class PermissionService {
@@ -72,6 +80,10 @@ public class PermissionService {
 
     /**
      * CRITICAL METHOD: Get user's permission level for a document
+     *
+     * FIX v2.0: Added Rule 3.5 — CategoryPermission check.
+     * Previously sub-accounts granted category-level access via grantCategoryPermission()
+     * would still get NO_ACCESS because this method never consulted category_permissions table.
      */
     public PermissionLevel getPermissionLevel(Long userId, Long documentId) {
         // Get document
@@ -101,8 +113,41 @@ public class PermissionService {
                 documentId, userId, LocalDateTime.now());
 
         if (permission.isPresent()) {
-            logger.debug("User {} has explicit permission: {}", userId, permission.get().getPermissionLevel());
+            logger.debug("User {} has explicit document permission: {}", userId, permission.get().getPermissionLevel());
             return permission.get().getPermissionLevel();
+        }
+
+        // Rule 3.5: Check category-level permission
+        // FIX: This rule was previously missing, meaning grantCategoryPermission() had zero effect.
+        // A primary account can grant a sub-account access to an entire category.
+        // When checking access, we look up whether there's a CategoryPermission record
+        // for this user, this document's category, under the primary account that owns the document.
+        if (document.getCategory() != null) {
+            Long docOwnerPrimaryId = null;
+            User docOwner = document.getUser();
+
+            if (docOwner.isPrimaryAccount()) {
+                // The document owner IS the primary account
+                docOwnerPrimaryId = docOwner.getId();
+            } else if (docOwner.getPrimaryAccountId() != null) {
+                // The document owner is a sub-account; use their primary account
+                docOwnerPrimaryId = docOwner.getPrimaryAccountId();
+            }
+
+            if (docOwnerPrimaryId != null) {
+                Optional<CategoryPermission> catPerm = categoryPermissionRepository
+                        .findByCategoryIdAndPrimaryAccountIdAndUserId(
+                                document.getCategory().getId(),
+                                docOwnerPrimaryId,
+                                userId
+                        );
+                if (catPerm.isPresent()) {
+                    PermissionLevel catLevel = catPerm.get().getDefaultPermissionLevel();
+                    logger.debug("User {} has category-level permission for doc {}: {}",
+                            userId, documentId, catLevel);
+                    return catLevel;
+                }
+            }
         }
 
         // Rule 4: Primary account can access all documents in their family
@@ -132,18 +177,15 @@ public class PermissionService {
      * Grant permission to a user for a document.
      *
      * Returns a plain Map DTO so that all lazy-loaded associations (User, Document)
-     * are accessed while the @Transactional session is still open. Callers must
-     * never unwrap a DocumentPermission entity from this method's result.
+     * are accessed while the @Transactional session is still open.
      */
     @Transactional
     public Map<String, Object> grantPermission(Long familyMemberId, Long documentId, PermissionLevel level) {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
-        // Get FamilyMember first
         FamilyMember familyMember = familyMemberRepository.findById(familyMemberId)
                 .orElseThrow(() -> new ResourceNotFoundException("FamilyMember", "id", familyMemberId));
 
-        // Get the user (either SUB_ACCOUNT user or PRIMARY_ACCOUNT)
         User targetUser = familyMember.getUser();
         if (targetUser == null) {
             targetUser = familyMember.getPrimaryAccount();
@@ -155,7 +197,6 @@ public class PermissionService {
         User currentUser = userRepository.findById(currentUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
 
-        // Check if permission already exists
         DocumentPermission existing = permissionRepository
                 .findByDocumentIdAndUserId(documentId, targetUser.getId())
                 .orElse(null);
@@ -166,7 +207,6 @@ public class PermissionService {
             existing.setUpdatedAt(LocalDateTime.now());
             permission = permissionRepository.save(existing);
         } else {
-            // Create new permission
             permission = new DocumentPermission();
             permission.setDocument(document);
             permission.setUser(targetUser);
@@ -177,8 +217,6 @@ public class PermissionService {
             permission = permissionRepository.save(permission);
         }
 
-        // Build and return a plain DTO *inside* the transaction so all proxies
-        // are still reachable — this is the fix for LazyInitializationException.
         Map<String, Object> dto = new HashMap<>();
         dto.put("id", permission.getId());
         dto.put("documentId", permission.getDocument().getId());
@@ -197,24 +235,18 @@ public class PermissionService {
      */
     @Transactional
     public void revokePermission(Long documentId, Long userId, String reason) {
-        // Verify current user has permission to revoke
         Long currentUserId = SecurityUtils.getCurrentUserId();
         if (!canAccessDocument(currentUserId, documentId, PermissionLevel.FULL_ACCESS)) {
             throw new PermissionDeniedException("You don't have permission to revoke access to this document");
         }
 
-        // Get permission
         DocumentPermission permission = permissionRepository.findByDocumentIdAndUserId(documentId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Permission not found"));
 
         PermissionLevel oldLevel = permission.getPermissionLevel();
-
-        // Delete permission
         permissionRepository.delete(permission);
-
         logger.info("Revoked permission for user {} on document {}", userId, documentId);
 
-        // Log audit trail
         Document document = documentRepository.findById(documentId).orElse(null);
         User user = userRepository.findById(userId).orElse(null);
         User revokedBy = userRepository.findById(currentUserId).orElse(null);
@@ -236,23 +268,19 @@ public class PermissionService {
         User currentUser = userRepository.findById(currentUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
 
-        // Only PRIMARY_ACCOUNT can set category defaults
         if (!currentUser.isPrimaryAccount()) {
             throw new PermissionDeniedException("Only primary account can set category permissions");
         }
 
-        // Get category and target user
         DocumentCategory category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
-        // Verify target user is in same family
         if (!targetUser.getPrimaryAccountId().equals(currentUserId)) {
             throw new BadRequestException("Can only set permissions for your family members");
         }
 
-        // Check if exists
         Optional<CategoryPermission> existing = categoryPermissionRepository
                 .findByCategoryIdAndPrimaryAccountIdAndUserId(categoryId, currentUserId, userId);
 
@@ -270,7 +298,6 @@ public class PermissionService {
         }
 
         categoryPermission = categoryPermissionRepository.save(categoryPermission);
-
         logger.info("Set category default permission: category={}, user={}, level={}",
                 categoryId, userId, defaultLevel);
 
@@ -297,16 +324,13 @@ public class PermissionService {
             throw new BadRequestException("Can only apply templates to your family members");
         }
 
-        // Get all categories
         List<DocumentCategory> categories = categoryRepository.findAll();
-
         Map<String, PermissionLevel> templateMapping = getTemplateMapping(template);
         int categoriesUpdated = 0;
 
         for (DocumentCategory category : categories) {
             PermissionLevel level = templateMapping.getOrDefault(
                     category.getName(), PermissionLevel.NO_ACCESS);
-
             setCategoryDefaultPermission(category.getId(), userId, level);
             categoriesUpdated++;
         }
@@ -330,7 +354,6 @@ public class PermissionService {
 
         switch (template) {
             case STANDARD:
-                // Balanced permissions for most family members
                 mapping.put("Aadhaar Card", PermissionLevel.VIEW_DOWNLOAD);
                 mapping.put("PAN Card", PermissionLevel.VIEW_DOWNLOAD);
                 mapping.put("Passport", PermissionLevel.VIEW_DOWNLOAD);
@@ -352,24 +375,19 @@ public class PermissionService {
                 break;
 
             case LIMITED:
-                // Restricted access for younger children
                 mapping.put("Aadhaar Card", PermissionLevel.VIEW_ONLY);
                 mapping.put("PAN Card", PermissionLevel.NO_ACCESS);
                 mapping.put("Passport", PermissionLevel.VIEW_ONLY);
                 mapping.put("Education Certificates", PermissionLevel.VIEW_DOWNLOAD);
                 mapping.put("Medical Reports", PermissionLevel.NO_ACCESS);
                 mapping.put("Birth Certificate", PermissionLevel.VIEW_ONLY);
-                // All others: NO_ACCESS
                 break;
 
             case MINIMAL:
-                // Very limited access
                 mapping.put("Education Certificates", PermissionLevel.VIEW_DOWNLOAD);
-                // All others: NO_ACCESS
                 break;
 
             case CUSTOM:
-                // User will set manually
                 break;
         }
 
@@ -395,9 +413,7 @@ public class PermissionService {
      * Get all permissions for a document
      */
     public List<DocumentPermission> getDocumentPermissions(Long documentId) {
-        // Verify current user has access
         requirePermission(documentId, PermissionLevel.FULL_ACCESS, "view permissions for");
-
         return permissionRepository.findByDocumentId(documentId);
     }
 
@@ -428,13 +444,12 @@ public class PermissionService {
         List<Map<String, Object>> accessibleDocs = new ArrayList<>();
 
         if (currentUser.isPrimaryAccount()) {
-            // Primary account: get all their documents
             List<Document> allDocs = documentRepository.findAllDocumentsForPrimaryAccount(userId);
             for (Document doc : allDocs) {
                 Map<String, Object> docMap = new HashMap<>();
                 docMap.put("id", doc.getId());
                 docMap.put("filename", doc.getOriginalFilename());
-                docMap.put("category", doc.getCategory().getName());
+                docMap.put("category", doc.getCategory() != null ? doc.getCategory().getName() : "Others");
                 docMap.put("owner", currentUser.getFullName());
                 docMap.put("permissionLevel", "FULL_ACCESS");
                 docMap.put("canView", true);
@@ -444,14 +459,13 @@ public class PermissionService {
                 accessibleDocs.add(docMap);
             }
         } else {
-            // Sub-account: get documents with explicit permissions
             List<DocumentPermission> permissions = permissionRepository.findByUserId(userId);
             for (DocumentPermission perm : permissions) {
                 Document doc = perm.getDocument();
                 Map<String, Object> docMap = new HashMap<>();
                 docMap.put("id", doc.getId());
                 docMap.put("filename", doc.getOriginalFilename());
-                docMap.put("category", doc.getCategory().getName());
+                docMap.put("category", doc.getCategory() != null ? doc.getCategory().getName() : "Others");
                 docMap.put("owner", doc.getUser().getFullName());
                 docMap.put("permissionLevel", perm.getPermissionLevel().name());
                 docMap.put("canView", true);
@@ -467,7 +481,6 @@ public class PermissionService {
 
     /**
      * Update document permission level.
-     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
     public Map<String, Object> updateDocumentPermission(Long permissionId, PermissionLevel newLevel) {
@@ -502,32 +515,26 @@ public class PermissionService {
     public void deleteDocumentPermission(Long permissionId) {
         DocumentPermission permission = permissionRepository.findById(permissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Permission", "id", permissionId));
-
         permissionRepository.delete(permission);
         logger.info("Deleted document permission: id={}", permissionId);
     }
 
     /**
      * Get all document permissions granted BY the current primary-account user.
-     * All association accesses happen inside this @Transactional boundary so
-     * Hibernate proxies are always initialised — no LazyInitializationException.
+     *
+     * FIX v2.0: Replaced findAll().stream().filter() with targeted repository query.
+     * findAll() on large tables is a serious performance issue in production.
+     * The repository must have: findByGrantedByIdOrDocumentUserId(Long, Long)
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getGrantedDocumentPermissions() {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
-        // Fetch every permission where this user is the grantor OR owns the document.
-        // Using the repository's findAll() is safe here because we are @Transactional —
-        // the session stays open for the full stream.
-        return permissionRepository.findAll().stream()
-                .filter(perm -> {
-                    boolean grantedByMe = perm.getGrantedBy() != null
-                            && currentUserId.equals(perm.getGrantedBy().getId());
-                    boolean myDocument  = perm.getDocument() != null
-                            && perm.getDocument().getUser() != null
-                            && currentUserId.equals(perm.getDocument().getUser().getId());
-                    return grantedByMe || myDocument;
-                })
+        // FIX: Use targeted query instead of findAll().stream().filter()
+        List<DocumentPermission> permissions =
+                permissionRepository.findByGrantedByIdOrDocumentUserId(currentUserId, currentUserId);
+
+        return permissions.stream()
                 .map(perm -> {
                     Map<String, Object> dto = new HashMap<>();
                     dto.put("id", perm.getId());
@@ -556,15 +563,18 @@ public class PermissionService {
 
     /**
      * Get all category permissions granted BY the current primary-account user.
-     * All association accesses happen inside this @Transactional boundary.
+     *
+     * FIX v2.0: Replaced findAll().stream().filter() with targeted repository query.
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getGrantedCategoryPermissions() {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
-        return categoryPermissionRepository.findAll().stream()
-                .filter(perm -> perm.getPrimaryAccount() != null
-                        && currentUserId.equals(perm.getPrimaryAccount().getId()))
+        // FIX: Use targeted query instead of findAll().stream().filter()
+        List<CategoryPermission> permissions =
+                categoryPermissionRepository.findByPrimaryAccountId(currentUserId);
+
+        return permissions.stream()
                 .map(perm -> {
                     Map<String, Object> dto = new HashMap<>();
                     dto.put("id", perm.getId());
@@ -595,30 +605,25 @@ public class PermissionService {
 
     /**
      * Grant category permission to family member.
-     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
     public Map<String, Object> grantCategoryPermission(Long categoryId, Long familyMemberId, PermissionLevel level) {
         Long currentUserId = SecurityUtils.getCurrentUserId();
 
-        // Get FamilyMember first
         FamilyMember familyMember = familyMemberRepository.findById(familyMemberId)
                 .orElseThrow(() -> new ResourceNotFoundException("FamilyMember", "id", familyMemberId));
 
-        // Get the user (either SUB_ACCOUNT user or PRIMARY_ACCOUNT)
         User targetUser = familyMember.getUser();
         if (targetUser == null) {
             targetUser = familyMember.getPrimaryAccount();
         }
 
-        // Get entities
         DocumentCategory category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
 
         User currentUser = userRepository.findById(currentUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", currentUserId));
 
-        // Check if permission already exists
         CategoryPermission existing = categoryPermissionRepository
                 .findByCategoryIdAndPrimaryAccountIdAndUserId(categoryId, currentUserId, targetUser.getId())
                 .orElse(null);
@@ -628,7 +633,6 @@ public class PermissionService {
             existing.setUpdatedAt(LocalDateTime.now());
             existing = categoryPermissionRepository.save(existing);
         } else {
-            // Create new permission
             CategoryPermission permission = new CategoryPermission();
             permission.setCategory(category);
             permission.setPrimaryAccount(currentUser);
@@ -639,7 +643,6 @@ public class PermissionService {
             existing = categoryPermissionRepository.save(permission);
         }
 
-        // Build DTO inside the transaction — safe to access all lazy proxies here
         Map<String, Object> dto = new HashMap<>();
         dto.put("id", existing.getId());
         dto.put("categoryId", existing.getCategory().getId());
@@ -660,7 +663,6 @@ public class PermissionService {
 
     /**
      * Update category permission level.
-     * Returns a plain Map DTO built inside the transaction to avoid LazyInitializationException.
      */
     @Transactional
     public Map<String, Object> updateCategoryPermission(Long permissionId, PermissionLevel newLevel) {
@@ -696,7 +698,6 @@ public class PermissionService {
     public void deleteCategoryPermission(Long permissionId) {
         CategoryPermission permission = categoryPermissionRepository.findById(permissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("CategoryPermission", "id", permissionId));
-
         categoryPermissionRepository.delete(permission);
         logger.info("Deleted category permission: id={}", permissionId);
     }

@@ -105,4 +105,12 @@ public interface DocumentPermissionRepository extends JpaRepository<DocumentPerm
     @Query("SELECT p FROM DocumentPermission p WHERE p.expiresAt IS NOT NULL " +
             "AND p.expiresAt BETWEEN CURRENT_TIMESTAMP AND :futureDate AND p.isActive = true")
     List<DocumentPermission> findPermissionsExpiringSoon(@Param("futureDate") LocalDateTime futureDate);
+
+
+    @Query("SELECT dp FROM DocumentPermission dp " +
+            "WHERE dp.grantedBy.id = :grantedById " +
+            "   OR dp.document.user.id = :documentOwnerId")
+    List<DocumentPermission> findByGrantedByIdOrDocumentUserId(
+            @Param("grantedById") Long grantedById,
+            @Param("documentOwnerId") Long documentOwnerId);
 }

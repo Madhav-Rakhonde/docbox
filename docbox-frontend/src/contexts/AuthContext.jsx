@@ -14,22 +14,44 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initAuth = async () => {
       try {
+        // No token at all → definitely not logged in
         if (!authService.isAuthenticated()) {
           setLoading(false);
           return;
         }
 
+        // ── Offline: trust the cached token + user, skip network call ──
+        if (!navigator.onLine) {
+          const cachedUser = authService.getCurrentUser();
+          setUser(cachedUser);
+          setIsAuthenticated(true);
+          setLoading(false);
+          return;
+        }
+
+        // ── Online: verify token with server ──
         const meResponse = await authService.getMe();
 
         if (meResponse?.success && meResponse.data) {
           setUser(meResponse.data);
           setIsAuthenticated(true);
         } else {
+          // Server responded but rejected the session → clear it
           await authService.logout();
         }
       } catch (error) {
         console.error('Auth init failed:', error);
-        await authService.logout();
+
+        // 401 / 403 → server explicitly rejected the token → log out
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+          await authService.logout();
+        } else {
+          // Network error (offline, timeout, etc.) → keep user logged in
+          const cachedUser = authService.getCurrentUser();
+          setUser(cachedUser);
+          setIsAuthenticated(true);
+        }
       } finally {
         setLoading(false);
       }

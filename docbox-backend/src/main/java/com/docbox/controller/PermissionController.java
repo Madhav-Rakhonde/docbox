@@ -11,19 +11,26 @@ import com.docbox.repository.DocumentPermissionRepository;
 import com.docbox.repository.CategoryPermissionRepository;
 import com.docbox.entity.FamilyMember;
 import com.docbox.exception.BadRequestException;
-import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Permission Controller - FIXED
- * CRITICAL: Manages all permission-related operations
+ * Permission Controller
+ *
+ * FIX v2.0:
+ *   setCategoryDefault() was building the response DTO *outside* the @Transactional
+ *   boundary by accessing lazy-loaded associations on the returned CategoryPermission entity.
+ *   This caused LazyInitializationException at runtime because the Hibernate session
+ *   was already closed when the controller called permission.getCategory().getName() etc.
+ *
+ *   Fix: delegate to PermissionService.grantCategoryPermission() which already returns
+ *   a safe Map DTO built inside its own @Transactional session.  All other endpoints
+ *   are unchanged.
  */
 @RestController
 @RequestMapping("/api/permissions")
@@ -35,11 +42,9 @@ public class PermissionController {
     @Autowired
     private FamilyMemberRepository familyMemberRepository;
 
-    // ✅ NEW: Injected for /granted/ endpoints only
     @Autowired
     private DocumentPermissionRepository documentPermissionRepository;
 
-    // ✅ NEW: Injected for /granted/ endpoints only
     @Autowired
     private CategoryPermissionRepository categoryPermissionRepository;
 
@@ -67,17 +72,12 @@ public class PermissionController {
         result.put("canShare", userLevel.canShare());
         result.put("hasFullAccess", userLevel.hasFullAccess());
 
-        return ResponseEntity.ok(ApiResponse.success(
-                "Permission check completed", result));
+        return ResponseEntity.ok(ApiResponse.success("Permission check completed", result));
     }
 
     /**
      * Grant permission to a user for a document
      * POST /api/permissions/grant
-     *
-     * The service returns a plain Map DTO built inside the @Transactional boundary,
-     * so no Hibernate proxy is ever touched here — this is the fix for
-     * LazyInitializationException on permission.getUser().getEmail() etc.
      */
     @PostMapping("/grant")
     public ResponseEntity<ApiResponse<Map<String, Object>>> grantPermission(
@@ -87,7 +87,6 @@ public class PermissionController {
         Long documentId = Long.parseLong(request.get("documentId").toString());
         PermissionLevel level = PermissionLevel.valueOf(request.get("permissionLevel").toString());
 
-        // Service builds the DTO inside its @Transactional session — no lazy-load risk here
         Map<String, Object> response = permissionService.grantPermission(familyMemberId, documentId, level);
 
         return ResponseEntity.ok(ApiResponse.success("Permission granted successfully", response));
@@ -113,6 +112,16 @@ public class PermissionController {
     /**
      * Set category default permission
      * POST /api/permissions/category-default
+     *
+     * FIX v2.0: Previously called setCategoryDefaultPermission() which returns a
+     * CategoryPermission entity, then accessed its lazy associations outside the
+     * transaction — causing LazyInitializationException.
+     *
+     * Fix: delegate to grantCategoryPermission() which returns a safe Map DTO
+     * built inside @Transactional, then look up familyMemberId from userId.
+     *
+     * NOTE: This endpoint accepts userId (not familyMemberId) for backwards compatibility.
+     * It looks up the FamilyMember record for that user and delegates to the safe path.
      */
     @PostMapping("/category-default")
     public ResponseEntity<ApiResponse<Map<String, Object>>> setCategoryDefault(
@@ -122,18 +131,33 @@ public class PermissionController {
         Long userId = Long.parseLong(request.get("userId").toString());
         PermissionLevel defaultLevel = PermissionLevel.valueOf(request.get("defaultPermissionLevel").toString());
 
-        CategoryPermission permission = permissionService.setCategoryDefaultPermission(
-                categoryId, userId, defaultLevel);
+        // Look up the FamilyMember for this userId so we can delegate to grantCategoryPermission()
+        // which returns a safe DTO and avoids LazyInitializationException
+        FamilyMember familyMember = familyMemberRepository.findByUserId(userId)
+                .orElse(null);
 
-        // ✅ BUILD DTO RESPONSE
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", permission.getId());
-        response.put("categoryId", permission.getCategory().getId());
-        response.put("categoryName", permission.getCategory().getName());
-        response.put("userId", permission.getUser().getId());
-        response.put("userEmail", permission.getUser().getEmail());
-        response.put("defaultPermissionLevel", permission.getDefaultPermissionLevel().toString());
-        response.put("createdAt", permission.getCreatedAt());
+        Map<String, Object> response;
+        if (familyMember != null) {
+            // Use the safe grantCategoryPermission path (DTO built inside @Transactional)
+            response = permissionService.grantCategoryPermission(categoryId, familyMember.getId(), defaultLevel);
+        } else {
+            // FamilyMember record not found for this userId — fall back to the original
+            // setCategoryDefaultPermission but build the DTO here inside a fresh call
+            // that delegates to the service (which still has @Transactional protection).
+            // This path handles edge cases like primary-account self-permissions.
+            CategoryPermission permission = permissionService.setCategoryDefaultPermission(
+                    categoryId, userId, defaultLevel);
+
+            // Build DTO here — within the same request thread but outside the
+            // setCategoryDefaultPermission transaction. To avoid lazy-load issues,
+            // we call updateCategoryPermission or just build a minimal safe response.
+            response = new HashMap<>();
+            response.put("id", permission.getId());
+            response.put("categoryId", categoryId);
+            response.put("userId", userId);
+            response.put("defaultPermissionLevel", defaultLevel.toString());
+            response.put("permissionLevel", defaultLevel.toString());
+        }
 
         return ResponseEntity.ok(ApiResponse.success(
                 "Category default permission set successfully", response));
@@ -166,7 +190,6 @@ public class PermissionController {
 
         List<DocumentPermission> permissions = permissionService.getDocumentPermissions(documentId);
 
-        // ✅ BUILD DTO LIST
         List<Map<String, Object>> response = permissions.stream().map(perm -> {
             Map<String, Object> dto = new HashMap<>();
             dto.put("id", perm.getId());
@@ -193,7 +216,6 @@ public class PermissionController {
 
         List<DocumentPermission> permissions = permissionService.getMyPermissions();
 
-        // ✅ BUILD DTO RESPONSE
         Map<String, Object> response = new HashMap<>();
         List<Map<String, Object>> documentPermissions = permissions.stream().map(perm -> {
             Map<String, Object> dto = new HashMap<>();
@@ -223,7 +245,6 @@ public class PermissionController {
 
         List<CategoryPermission> permissions = permissionService.getMyCategoryPermissions();
 
-        // ✅ BUILD DTO LIST
         List<Map<String, Object>> response = permissions.stream().map(perm -> {
             Map<String, Object> dto = new HashMap<>();
             dto.put("id", perm.getId());
@@ -253,8 +274,6 @@ public class PermissionController {
             @RequestBody Map<String, Object> request) {
 
         PermissionLevel level = PermissionLevel.valueOf(request.get("permissionLevel").toString());
-
-        // Service builds DTO inside @Transactional — no lazy-load risk
         Map<String, Object> response = permissionService.updateDocumentPermission(id, level);
 
         return ResponseEntity.ok(ApiResponse.success("Permission updated successfully", response));
@@ -266,16 +285,13 @@ public class PermissionController {
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> deletePermission(@PathVariable Long id) {
-
         permissionService.deleteDocumentPermission(id);
-
         return ResponseEntity.ok(ApiResponse.success("Permission deleted successfully"));
     }
 
     /**
      * Grant category permission
      * POST /api/permissions/category/grant
-     * ✅ FIXED - Returns DTO to avoid Hibernate lazy loading
      */
     @PostMapping("/category/grant")
     public ResponseEntity<ApiResponse<Map<String, Object>>> grantCategoryPermission(
@@ -285,7 +301,6 @@ public class PermissionController {
         Long familyMemberId = Long.parseLong(request.get("familyMemberId").toString());
         PermissionLevel level = PermissionLevel.valueOf(request.get("permissionLevel").toString());
 
-        // Service builds DTO inside @Transactional — no lazy-load risk
         Map<String, Object> response = permissionService.grantCategoryPermission(
                 categoryId, familyMemberId, level);
 
@@ -302,8 +317,6 @@ public class PermissionController {
             @RequestBody Map<String, Object> request) {
 
         PermissionLevel level = PermissionLevel.valueOf(request.get("permissionLevel").toString());
-
-        // Service builds DTO inside @Transactional — no lazy-load risk
         Map<String, Object> response = permissionService.updateCategoryPermission(id, level);
 
         return ResponseEntity.ok(ApiResponse.success("Category permission updated successfully", response));
@@ -315,9 +328,7 @@ public class PermissionController {
      */
     @DeleteMapping("/category/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteCategoryPermission(@PathVariable Long id) {
-
         permissionService.deleteCategoryPermission(id);
-
         return ResponseEntity.ok(ApiResponse.success("Category permission deleted successfully"));
     }
 
@@ -355,20 +366,12 @@ public class PermissionController {
         templates.put("MINIMAL", minimal);
         templates.put("CUSTOM", custom);
 
-        return ResponseEntity.ok(ApiResponse.success(
-                "Permission templates retrieved", templates));
+        return ResponseEntity.ok(ApiResponse.success("Permission templates retrieved", templates));
     }
-
-    // =========================================================================
-    // ✅ NEW ENDPOINTS ADDED BELOW — all existing code above is UNCHANGED
-    // =========================================================================
 
     /**
      * Get document permissions GRANTED BY the current primary-account user
      * GET /api/permissions/granted/documents
-     *
-     * Delegates to the service where @Transactional keeps the Hibernate session open,
-     * so all lazy associations (User, Document, Category) are safely accessible.
      */
     @GetMapping("/granted/documents")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getGrantedDocumentPermissions() {
@@ -380,9 +383,6 @@ public class PermissionController {
     /**
      * Get category permissions GRANTED BY the current primary-account user
      * GET /api/permissions/granted/categories
-     *
-     * Delegates to the service where @Transactional keeps the Hibernate session open,
-     * so all lazy associations (User, Category) are safely accessible.
      */
     @GetMapping("/granted/categories")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getGrantedCategoryPermissions() {

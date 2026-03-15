@@ -81,4 +81,6 @@ public interface CategoryPermissionRepository extends JpaRepository<CategoryPerm
             "AND cp.defaultPermissionLevel >= :minLevel")
     List<DocumentCategory> findCategoriesWithMinPermission(@Param("userId") Long userId,
                                                            @Param("minLevel") PermissionLevel minLevel);
+
+
 }

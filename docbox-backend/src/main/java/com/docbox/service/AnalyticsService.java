@@ -15,7 +15,12 @@ import java.util.stream.Collectors;
 
 /**
  * Analytics Service
- * Provides dashboard statistics, insights, and analytics
+ *
+ * FIX v2.0: Null-safe category access throughout.
+ * Previously getExpiryInsights() called doc.getCategory().getName() without
+ * a null check — documents with null categories (e.g. briefly during async
+ * processing) would throw NullPointerException and crash the entire analytics endpoint.
+ * Same pattern fixed in buildDocumentList() and getStorageInsights().
  */
 @Service
 public class AnalyticsService {
@@ -43,7 +48,6 @@ public class AnalyticsService {
 
         Map<String, Object> stats = new HashMap<>();
 
-        // Document stats
         long totalDocuments = documentRepository.getTotalDocumentCount(userId);
         Long storageUsed = documentRepository.getTotalStorageUsed(userId);
 
@@ -53,21 +57,17 @@ public class AnalyticsService {
         stats.put("storageLimit", 5368709120L); // 5GB default
         stats.put("storagePercentage", calculateStoragePercentage(storageUsed, 5368709120L));
 
-        // Expiring documents
         List<Document> expiringSoon = documentRepository.findDocumentsExpiringBetween(
                 userId, LocalDate.now(), LocalDate.now().plusDays(30));
         stats.put("documentsExpiringSoon", expiringSoon.size());
 
-        // Expired documents
         List<Document> expired = documentRepository.findExpiredDocuments(
                 userId, LocalDate.now());
         stats.put("expiredDocuments", expired.size());
 
-        // Category breakdown
         List<Object[]> categoryBreakdown = documentRepository.getDocumentCountByCategory(userId);
         stats.put("documentsByCategory", buildCategoryBreakdown(categoryBreakdown));
 
-        // Family stats (if primary account)
         if (user != null && user.isPrimaryAccount()) {
             long familyMembers = familyMemberRepository.countByPrimaryAccountId(userId);
             stats.put("totalFamilyMembers", familyMembers);
@@ -78,7 +78,6 @@ public class AnalyticsService {
         }
 
         logger.debug("Dashboard stats generated for user {}", userId);
-
         return stats;
     }
 
@@ -90,23 +89,20 @@ public class AnalyticsService {
 
         Map<String, Object> stats = new HashMap<>();
 
-        // Count by file type
         List<Object[]> byFileType = documentRepository.getDocumentCountByFileType(userId);
         stats.put("byFileType", buildFileTypeBreakdown(byFileType));
 
-        // Average file size
         Long totalStorage = documentRepository.getTotalStorageUsed(userId);
         long totalDocs = documentRepository.getTotalDocumentCount(userId);
         long avgFileSize = totalDocs > 0 ? (totalStorage != null ? totalStorage / totalDocs : 0) : 0;
         stats.put("averageFileSizeBytes", avgFileSize);
         stats.put("averageFileSizeMB", avgFileSize / (1024 * 1024));
 
-        // Most common categories
         List<Object[]> categoryStats = documentRepository.getDocumentCountByCategory(userId);
         stats.put("topCategories", categoryStats.stream()
                 .limit(5)
                 .map(arr -> Map.of(
-                        "category", arr[0],
+                        "category", arr[0] != null ? arr[0] : "Others",
                         "count", arr[1]
                 ))
                 .collect(Collectors.toList()));
@@ -118,39 +114,39 @@ public class AnalyticsService {
      * Get activity timeline
      */
     public List<Map<String, Object>> getActivityTimeline(int days) {
-        // Return empty list for now - would need DocumentAuditLog queries
         return new ArrayList<>();
     }
 
     /**
      * Get expiry insights
+     *
+     * FIX v2.0: Added null-safe category check in the groupingBy collector.
+     * Previously doc.getCategory().getName() would NPE for documents where
+     * category is null (possible during async PROCESSING phase).
      */
     public Map<String, Object> getExpiryInsights() {
         Long userId = SecurityUtils.getCurrentUserId();
 
         Map<String, Object> insights = new HashMap<>();
 
-        // Expiring in next 7 days
         List<Document> next7Days = documentRepository.findDocumentsExpiringBetween(
                 userId, LocalDate.now(), LocalDate.now().plusDays(7));
         insights.put("expiringIn7Days", next7Days.size());
         insights.put("urgentDocuments", buildDocumentList(next7Days));
 
-        // Expiring in 8-30 days
         List<Document> next30Days = documentRepository.findDocumentsExpiringBetween(
                 userId, LocalDate.now().plusDays(8), LocalDate.now().plusDays(30));
         insights.put("expiringIn30Days", next30Days.size());
 
-        // Already expired
         List<Document> expired = documentRepository.findExpiredDocuments(
                 userId, LocalDate.now());
         insights.put("expired", expired.size());
         insights.put("expiredDocuments", buildDocumentList(expired));
 
-        // By category
+        // FIX: null-safe category name — documents in PROCESSING state may have null category
         Map<String, Long> expiringByCategory = next7Days.stream()
                 .collect(Collectors.groupingBy(
-                        doc -> doc.getCategory().getName(),
+                        doc -> doc.getCategory() != null ? doc.getCategory().getName() : "Others",
                         Collectors.counting()
                 ));
         insights.put("expiringByCategory", expiringByCategory);
@@ -162,17 +158,11 @@ public class AnalyticsService {
      * Get sharing statistics
      */
     public Map<String, Object> getSharingStats() {
-        Long userId = SecurityUtils.getCurrentUserId();
-
         Map<String, Object> stats = new HashMap<>();
-
-        // These would need SharedLinkRepository queries
-        // For now, return default values
         stats.put("totalShareLinks", 0);
         stats.put("activeShareLinks", 0);
         stats.put("totalViews", 0);
         stats.put("mostViewedLinks", new ArrayList<>());
-
         return stats;
     }
 
@@ -191,21 +181,20 @@ public class AnalyticsService {
         insights.put("totalStorageMB", storageBytes / (1024 * 1024));
         insights.put("totalStorageGB", storageBytes / (1024.0 * 1024.0 * 1024.0));
 
-        // Storage by category
         List<Object[]> storageByCategory = documentRepository.getStorageByCategory(userId);
         insights.put("storageByCategory", storageByCategory.stream()
                 .map(arr -> Map.of(
-                        "category", arr[0],
+                        // FIX: null-safe category name
+                        "category", arr[0] != null ? arr[0] : "Others",
                         "bytes", arr[1],
                         "mb", ((Long) arr[1]) / (1024 * 1024)
                 ))
                 .collect(Collectors.toList()));
 
-        // Storage by file type
         List<Object[]> storageByType = documentRepository.getStorageByFileType(userId);
         insights.put("storageByFileType", storageByType.stream()
                 .map(arr -> Map.of(
-                        "fileType", arr[0],
+                        "fileType", arr[0] != null ? arr[0] : "Unknown",
                         "bytes", arr[1],
                         "mb", ((Long) arr[1]) / (1024 * 1024)
                 ))
@@ -227,7 +216,8 @@ public class AnalyticsService {
         return data.stream()
                 .map(arr -> {
                     Map<String, Object> category = new HashMap<>();
-                    category.put("name", arr[0]);
+                    // FIX: null-safe category name
+                    category.put("name", arr[0] != null ? arr[0] : "Others");
                     category.put("count", arr[1]);
                     return category;
                 })
@@ -238,20 +228,27 @@ public class AnalyticsService {
         return data.stream()
                 .map(arr -> {
                     Map<String, Object> fileType = new HashMap<>();
-                    fileType.put("type", arr[0]);
+                    fileType.put("type", arr[0] != null ? arr[0] : "Unknown");
                     fileType.put("count", arr[1]);
                     return fileType;
                 })
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Build a document summary list for expiry insights.
+     *
+     * FIX v2.0: Added null-safe category access.
+     * doc.getCategory() can be null for documents still in PROCESSING status.
+     */
     private List<Map<String, Object>> buildDocumentList(List<Document> documents) {
         return documents.stream()
                 .map(doc -> {
                     Map<String, Object> data = new HashMap<>();
                     data.put("id", doc.getId());
                     data.put("filename", doc.getOriginalFilename());
-                    data.put("category", doc.getCategory().getName());
+                    // FIX: null-safe category check
+                    data.put("category", doc.getCategory() != null ? doc.getCategory().getName() : "Others");
                     data.put("expiryDate", doc.getExpiryDate());
                     data.put("daysUntilExpiry", doc.getDaysUntilExpiry());
                     return data;
