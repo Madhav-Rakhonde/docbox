@@ -10,24 +10,21 @@
  *   Navigation requests          →  Network-first, fallback to /index.html
  *
  * ── What this SW does NOT cache ──────────────────────────────────────────────
- *   Document binaries (PDFs, images) are now stored AES-256-GCM encrypted
- *   in IndexedDB by offlineService.js + secureDocStore.js. The old DOC_CACHE
- *   and CACHE_DOCUMENTS message handler have been intentionally removed.
- *
- * ── Cache strategy summary ───────────────────────────────────────────────────
- *   SHELL_CACHE  →  stale-while-revalidate  (JS, CSS, fonts, images)
- *   API_CACHE    →  network-first           (document lists, metadata)
- *   Navigation   →  network-first, fallback to /index.html (SPA)
+ *   Document binaries (PDFs, images) are stored AES-256-GCM encrypted
+ *   in IndexedDB by offlineService.js + secureDocStore.js.
+ *   The old DOC_CACHE and CACHE_DOCUMENTS handler have been removed.
  */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v1';          // ← kept as v1 so existing shell cache is preserved
 const SHELL_CACHE   = `docbox-shell-${CACHE_VERSION}`;
 const API_CACHE     = `docbox-api-${CACHE_VERSION}`;
 
-// App shell assets pre-cached on install
+// Only pre-cache the bare minimum on install.
+// Hashed JS/CSS bundles (assets/index-xxx.js) are added automatically
+// by staleWhileRevalidate on first online load and served from cache offline.
 const SHELL_ASSETS = ['/', '/index.html', '/offline.html'];
 
-// API URL patterns to cache with network-first strategy
+// API URL patterns — network-first with offline JSON fallback
 const API_PATTERNS = [
   /\/api\/documents(\?.*)?$/,
   /\/api\/documents\/stats/,
@@ -92,9 +89,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. HTML navigation → network-first, fallback to /index.html (SPA shell)
-  //    This ensures /view/:id works offline — the SW serves index.html,
-  //    React Router boots, and DocumentViewerPage loads the doc from IndexedDB.
+  // 2. HTML navigation → network-first, fallback to /index.html (SPA shell).
+  //    This ensures /view/:id works offline — SW serves index.html,
+  //    React Router boots, DocumentViewerPage loads doc from IndexedDB.
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
@@ -102,12 +99,21 @@ self.addEventListener('fetch', (event) => {
           caches.match(request)
             .then((r) => r || caches.match('/index.html'))
             .then((r) => r || caches.match('/offline.html'))
+            .then((r) => {
+              if (r) return r;
+              // Last resort inline fallback — prevents blank white screen
+              return new Response(
+                '<html><body><h2>You are offline</h2><p>Please reconnect and reload.</p></body></html>',
+                { status: 200, headers: { 'Content-Type': 'text/html' } }
+              );
+            })
         )
     );
     return;
   }
 
-  // 3. Static assets (JS, CSS, fonts, icons) → stale-while-revalidate
+  // 3. Static assets (JS, CSS, fonts, icons) → stale-while-revalidate.
+  //    Hashed bundles get cached on first online visit and served offline.
   if (url.origin === self.location.origin) {
     event.respondWith(staleWhileRevalidate(request, SHELL_CACHE));
   }
@@ -126,7 +132,7 @@ async function networkFirst(request, cacheName) {
     const cached = await caches.match(request);
     if (cached) return cached;
 
-    // Graceful offline JSON so the UI doesn't crash on list endpoints
+    // Graceful offline JSON so UI list components don't crash
     return new Response(
       JSON.stringify({
         success: false,
@@ -144,7 +150,7 @@ async function staleWhileRevalidate(request, cacheName) {
   const cache  = await caches.open(cacheName);
   const cached = await cache.match(request);
 
-  // Always revalidate in the background
+  // Always try to refresh in the background
   const fetchPromise = fetch(request)
     .then((response) => {
       if (response.ok) cache.put(request, response.clone());
@@ -152,14 +158,30 @@ async function staleWhileRevalidate(request, cacheName) {
     })
     .catch(() => null);
 
-  return cached || (await fetchPromise);
+  if (cached) {
+    // Serve from cache immediately, update happens in background
+    fetchPromise.catch(() => {}); // suppress unhandled rejection warning
+    return cached;
+  }
+
+  // Nothing cached — wait for network
+  const fetched = await fetchPromise;
+  if (fetched) return fetched;
+
+  // Both cache and network failed (offline + asset not yet cached).
+  // Return a proper 503 Response instead of throwing or returning null.
+  // Throwing / returning null is what caused the
+  // "Failed to convert value to Response" errors in the console.
+  return new Response('Asset not available offline.', {
+    status:  503,
+    headers: { 'Content-Type': 'text/plain' },
+  });
 }
 
 // ─── Message handler ───────────────────────────────────────────────────────────
 self.addEventListener('message', async (event) => {
 
   // CACHE_API_RESPONSE: manually cache a specific API payload
-  // (used by the app to pre-populate the API cache for offline lists)
   if (event.data?.type === 'CACHE_API_RESPONSE') {
     const { url, data } = event.data;
     if (!url || !data) return;
@@ -175,7 +197,7 @@ self.addEventListener('message', async (event) => {
     }
   }
 
-  // NOTE: CACHE_DOCUMENTS has been removed.
-  // Document binaries (PDFs, images) are now encrypted and stored in
-  // IndexedDB by offlineService.cacheDocumentsSecurely() on the client side.
+  // NOTE: CACHE_DOCUMENTS has been intentionally removed.
+  // Document binaries (PDFs, images) are now AES-256-GCM encrypted and
+  // stored in IndexedDB by offlineService.cacheDocumentsSecurely().
 });
