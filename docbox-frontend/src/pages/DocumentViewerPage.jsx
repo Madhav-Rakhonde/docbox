@@ -6,10 +6,11 @@ import {
 } from '@mui/material';
 import {
   ArrowBack, Download, ZoomIn, ZoomOut,
-  ErrorOutline, InsertDriveFile, LockOutlined,
+  ErrorOutline, InsertDriveFile, LockOutlined, WifiOff,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import api, { endpoints } from '../services/api';
+import { loadSecureDoc } from '../utils/secureDocStore';
 
 /**
  * DocumentViewerPage
@@ -19,39 +20,22 @@ import api, { endpoints } from '../services/api';
  * ROUTE SETUP — CRITICAL
  * ══════════════════════════════════════════════════════════════
  * This page MUST be placed OUTSIDE PrivateRoute in your router.
- * PrivateRoute wraps AppLayout and redirects to /login when the
- * auth context hasn't fully loaded in the new tab yet.
- *
- * In your App.jsx / router:
- *
- *   import DocumentViewerPage from './pages/DocumentViewerPage';
  *
  *   // ✅ OUTSIDE PrivateRoute — handles own auth
  *   <Route path="/view/:id" element={<DocumentViewerPage />} />
  *
- *   // ❌ NOT inside PrivateRoute like this:
- *   // <Route element={<PrivateRoute />}>
- *   //   <Route path="/view/:id" element={<DocumentViewerPage />} />
- *   // </Route>
+ * ══════════════════════════════════════════════════════════════
+ * OFFLINE SUPPORT
+ * ══════════════════════════════════════════════════════════════
+ * Online  → fetches metadata + file blob from the API as before.
+ *           Also saves the blob to IndexedDB (encrypted) so the
+ *           document is available next time offline.
  *
- * ══════════════════════════════════════════════════════════════
- * WHY THIS PAGE EXISTS
- * ══════════════════════════════════════════════════════════════
- * openDocumentInTab() calls window.open('/view/:id', '_blank').
- * The new tab opens instantly (< 100ms). This page then fetches
- * and renders the document with a loading spinner.
- *
- * This is faster than the old approach of fetching the blob first
- * (which made the user wait 3–10 seconds before the tab opened).
- *
- * ══════════════════════════════════════════════════════════════
- * AUTH HANDLING
- * ══════════════════════════════════════════════════════════════
- * This page does NOT use AuthContext (which may not have loaded
- * yet in a fresh tab). Instead it reads the JWT directly from
- * localStorage — the same token the rest of the app uses.
- * If no token is found, it shows a "not logged in" screen with
- * a Login button instead of silently redirecting.
+ * Offline → loads metadata from the SW API cache (via api.get,
+ *           which the SW serves from docbox-api-v1).
+ *           Loads the file blob from IndexedDB (AES-256-GCM
+ *           encrypted, keyed from the auth token).
+ *           Shows a "Viewing offline copy" banner.
  */
 
 const MIME_MAP = {
@@ -73,17 +57,18 @@ const DocumentViewerPage = () => {
   const { id }       = useParams();
   const navigate     = useNavigate();
 
-  const [metadata,   setMetadata]   = useState(null);
-  const [objectUrl,  setObjectUrl]  = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState(null);
-  const [imageScale, setImageScale] = useState(1);
+  const [metadata,    setMetadata]    = useState(null);
+  const [objectUrl,   setObjectUrl]   = useState(null);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState(null);
+  const [imageScale,  setImageScale]  = useState(1);
   const [notLoggedIn, setNotLoggedIn] = useState(false);
+  const [isOffline,   setIsOffline]   = useState(false); // true when serving from cache
 
   const objectUrlRef = useRef(null);
 
   useEffect(() => {
-    // Check token directly from localStorage — do NOT rely on AuthContext
+    // Read token directly from localStorage — do NOT rely on AuthContext
     // because in a fresh tab the context provider may not have run yet.
     const token = localStorage.getItem('token');
     if (!token || token === 'undefined') {
@@ -105,48 +90,54 @@ const DocumentViewerPage = () => {
     };
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Fetch metadata + file ─────────────────────────────────────────────────
+  // ── Load document (online + offline) ─────────────────────────────────────
   const loadDocument = async (docId) => {
     try {
       setLoading(true);
       setError(null);
+      setIsOffline(false);
 
-      // Step 1: metadata — gives us filename, fileType, size
-      const metaRes = await api.get(`${endpoints.documents}/${docId}`);
-      const doc     = metaRes.data?.data || metaRes.data;
-      setMetadata(doc);
-
-      // Update browser tab title to the filename
-      if (doc?.originalFilename) {
-        document.title = doc.originalFilename;
+      // ── Step 1: metadata ──────────────────────────────────────────────────
+      // Online  → fresh from API, SW caches it automatically (network-first).
+      // Offline → SW serves it from docbox-api-v1 cache.
+      let doc;
+      try {
+        const metaRes = await api.get(`${endpoints.documents}/${docId}`);
+        doc = metaRes.data?.data || metaRes.data;
+      } catch (metaErr) {
+        // Metadata fetch failed even with SW cache — we are offline and this
+        // specific doc metadata was never cached. Show a clear message.
+        if (!navigator.onLine) {
+          setError(
+            'Metadata for this document is not available offline. ' +
+            'Please connect to the internet and open the document once to cache it.'
+          );
+          return;
+        }
+        throw metaErr; // re-throw for online errors (403, 404, etc.)
       }
 
-      const ft = doc?.fileType?.toLowerCase();
+      setMetadata(doc);
+      if (doc?.originalFilename) document.title = doc.originalFilename;
 
+      const ft = doc?.fileType?.toLowerCase();
       if (!PREVIEWABLE.has(ft)) {
-        // Cannot preview this type — show download prompt
+        // Cannot preview this file type — show download prompt
         setLoading(false);
         return;
       }
 
-      // Step 2: file as blob
-      const fileRes   = await api.get(
-        `${endpoints.documents}/${docId}/download`,
-        { responseType: 'blob' }
-      );
-      const rawBlob   = fileRes.data;
-      const mime      = MIME_MAP[ft] || rawBlob.type || 'application/octet-stream';
-      const typedBlob = new Blob([rawBlob], { type: mime });
-      const url       = URL.createObjectURL(typedBlob);
-
-      objectUrlRef.current = url;
-      setObjectUrl(url);
+      // ── Step 2: file blob ─────────────────────────────────────────────────
+      if (navigator.onLine) {
+        await loadFromNetwork(docId, ft);
+      } else {
+        await loadFromIndexedDB(docId);
+      }
 
     } catch (err) {
       const status = err?.response?.status;
 
       if (status === 401) {
-        // Token expired mid-session
         setNotLoggedIn(true);
         return;
       }
@@ -160,20 +151,80 @@ const DocumentViewerPage = () => {
     }
   };
 
+  // ── Online: fetch from API, also save to IndexedDB for future offline use ─
+  const loadFromNetwork = async (docId, ft) => {
+    const fileRes = await api.get(
+      `${endpoints.documents}/${docId}/download`,
+      { responseType: 'blob' }
+    );
+
+    const rawBlob   = fileRes.data;
+    const mime      = MIME_MAP[ft] || rawBlob.type || 'application/octet-stream';
+    const typedBlob = new Blob([rawBlob], { type: mime });
+    const url       = URL.createObjectURL(typedBlob);
+
+    objectUrlRef.current = url;
+    setObjectUrl(url);
+
+    // Save to IndexedDB in the background so it's available offline next time.
+    // We do this silently — don't block the viewer or show errors to the user.
+    try {
+      const { saveSecureDoc } = await import('../utils/secureDocStore');
+      const buffer = await typedBlob.arrayBuffer();
+      await saveSecureDoc(docId, buffer, mime);
+    } catch (saveErr) {
+      // Non-critical — viewer still works, just won't be cached offline
+      console.warn('[Viewer] Could not save to offline cache:', saveErr.message);
+    }
+  };
+
+  // ── Offline: decrypt from IndexedDB ───────────────────────────────────────
+  const loadFromIndexedDB = async (docId) => {
+    const result = await loadSecureDoc(docId);
+
+    if (!result) {
+      setError(
+        'This document is not available offline. ' +
+        'Please connect to the internet and open this document once to cache it.'
+      );
+      return;
+    }
+
+    const blob = new Blob([result.buffer], { type: result.mimeType });
+    const url  = URL.createObjectURL(blob);
+
+    objectUrlRef.current = url;
+    setObjectUrl(url);
+    setIsOffline(true); // show the offline banner
+  };
+
   // ── Download ──────────────────────────────────────────────────────────────
   const handleDownload = async () => {
     if (!metadata) return;
     try {
-      let url      = objectUrl;
-      let isFresh  = false;
+      let url     = objectUrl;
+      let isFresh = false;
 
       if (!url) {
-        const res = await api.get(
-          `${endpoints.documents}/${id}/download`,
-          { responseType: 'blob' }
-        );
-        url     = URL.createObjectURL(res.data);
-        isFresh = true;
+        if (!navigator.onLine) {
+          // Try IndexedDB
+          const result = await loadSecureDoc(id);
+          if (result) {
+            const blob = new Blob([result.buffer], { type: result.mimeType });
+            url     = URL.createObjectURL(blob);
+            isFresh = true;
+          } else {
+            toast.error('Document not available offline');
+            return;
+          }
+        } else {
+          const res = await api.get(
+            `${endpoints.documents}/${id}/download`,
+            { responseType: 'blob' }
+          );
+          url     = URL.createObjectURL(res.data);
+          isFresh = true;
+        }
       }
 
       const link = window.document.createElement('a');
@@ -284,6 +335,23 @@ const DocumentViewerPage = () => {
             {metadata?.originalFilename || (loading ? 'Loading…' : 'Document')}
           </Typography>
 
+          {/* Offline badge */}
+          {isOffline && (
+            <Chip
+              icon={<WifiOff sx={{ fontSize: '13px !important', color: '#F59E0B !important' }} />}
+              label="Offline copy"
+              size="small"
+              sx={{
+                bgcolor: 'rgba(245,158,11,0.15)',
+                color: '#F59E0B',
+                fontSize: '0.68rem',
+                height: 20,
+                flexShrink: 0,
+                border: '1px solid rgba(245,158,11,0.3)',
+              }}
+            />
+          )}
+
           {/* File type chip */}
           {metadata?.fileType && (
             <Chip label={metadata.fileType.toUpperCase()} size="small" sx={{
@@ -302,7 +370,7 @@ const DocumentViewerPage = () => {
             }} />
           )}
 
-          {/* Image zoom */}
+          {/* Image zoom controls */}
           {isImage && objectUrl && (
             <>
               <Tooltip title="Zoom out">
@@ -353,6 +421,21 @@ const DocumentViewerPage = () => {
         </Toolbar>
       </AppBar>
 
+      {/* ── Offline banner ────────────────────────────────────────── */}
+      {isOffline && (
+        <Box sx={{
+          bgcolor: 'rgba(245,158,11,0.1)',
+          borderBottom: '1px solid rgba(245,158,11,0.2)',
+          px: 2, py: 0.75,
+          display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0,
+        }}>
+          <WifiOff sx={{ fontSize: 14, color: '#F59E0B' }} />
+          <Typography sx={{ color: '#F59E0B', fontSize: '0.78rem' }}>
+            You are offline — viewing a cached copy of this document.
+          </Typography>
+        </Box>
+      )}
+
       {/* ── Content ──────────────────────────────────────────────── */}
       <Box sx={{
         flex: 1, overflow: 'hidden', position: 'relative',
@@ -368,7 +451,7 @@ const DocumentViewerPage = () => {
           }}>
             <CircularProgress size={52} sx={{ color: '#6366F1' }} />
             <Typography sx={{ color: '#475569', fontSize: '0.875rem' }}>
-              Loading document…
+              {navigator.onLine ? 'Loading document…' : 'Loading offline copy…'}
             </Typography>
           </Box>
         )}
@@ -379,16 +462,24 @@ const DocumentViewerPage = () => {
             display: 'flex', flexDirection: 'column',
             alignItems: 'center', gap: 2, p: 4, maxWidth: 480, width: '100%',
           }}>
-            <ErrorOutline sx={{ fontSize: 52, color: '#EF4444' }} />
-            <Alert severity="error" sx={{ width: '100%', borderRadius: '10px' }}>
+            {!navigator.onLine
+              ? <WifiOff sx={{ fontSize: 52, color: '#F59E0B' }} />
+              : <ErrorOutline sx={{ fontSize: 52, color: '#EF4444' }} />
+            }
+            <Alert
+              severity={!navigator.onLine ? 'warning' : 'error'}
+              sx={{ width: '100%', borderRadius: '10px' }}
+            >
               {error}
             </Alert>
-            <Button variant="outlined" onClick={() => loadDocument(id)} sx={{
-              borderRadius: '8px', color: '#94A3B8', borderColor: '#334155',
-              '&:hover': { borderColor: '#6366F1', color: '#A5B4FC' },
-            }}>
-              Retry
-            </Button>
+            {navigator.onLine && (
+              <Button variant="outlined" onClick={() => loadDocument(id)} sx={{
+                borderRadius: '8px', color: '#94A3B8', borderColor: '#334155',
+                '&:hover': { borderColor: '#6366F1', color: '#A5B4FC' },
+              }}>
+                Retry
+              </Button>
+            )}
           </Box>
         )}
 
