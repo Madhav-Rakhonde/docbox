@@ -181,7 +181,7 @@ const Login = () => {
           }}
         >
           {/* Mobile logo */}
-          <Box sx={{ display: { lg: 'none' }, mb: 3, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{ display: { xs: 'flex', lg: 'none' }, mb: 3, alignItems: 'center', gap: 1.5 }}>
             <LogoMark />
             <Typography sx={{
               fontFamily: "'DM Sans', sans-serif",
